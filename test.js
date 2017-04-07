@@ -4,6 +4,10 @@ const Promise = require('bluebird')
 const co = Promise.coroutine
 const collect = Promise.promisify(require('stream-collector'))
 const memdb = require('memdb')
+const through = require('through2')
+const pump = require('pump')
+const { PassThrough } = require('readable-stream')
+const reorder = require('./sort-transform')
 const { createMultiqueue, processMultiqueue } = require('./')
 
 test('basic', co(function* (t) {
@@ -110,6 +114,46 @@ test('process', co(function* (t) {
         resolve()
       }, 100)
     })
+  }
+}))
+
+test('order', function (t) {
+  const unordered = new PassThrough({ objectMode: true })
+  ;[5, 2, 4, 0, 3, 1].forEach(i => {
+    unordered.push(i)
+  })
+
+  unordered.push(null)
+
+  let i = 0
+  pump(unordered, reorder({
+      getPosition: item => item,
+      start: 0
+    }))
+    .on('data', data => t.equal(data, i++))
+    .on('end', t.end)
+})
+
+test('custom seq', co(function* (t) {
+  const items = [5, 2, 4, 0, 3, 1]
+  t.plan(items.length)
+
+  const db = memdb({ valueEncoding: 'json' })
+  const multiqueue = createMultiqueue({ db, autoincrement: false })
+
+  items.forEach(i => {
+    multiqueue.enqueue({
+      lane: 'bob',
+      value: { i },
+      seq: i
+    })
+  })
+
+  processMultiqueue({ multiqueue, worker }).start()
+
+  let i = 0
+  function worker ({ lane, value }) {
+    t.equal(value.i, i++)
   }
 }))
 

@@ -6,3 +6,7 @@ Persistent multiqueue, for parallelism between queues, and serial..ism within th
 ## Usage 
 
 See [example](./example.js) for a lesson in nagging
+
+## Todo
+
+Improve accounting of lanes, maybe using level-updown to atomically save a lane name with the append to changes-feed

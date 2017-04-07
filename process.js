@@ -4,6 +4,11 @@ const Promise = require('bluebird')
 const co = Promise.coroutine
 const pump = require('pump')
 const through = require('through2')
+const merge = require('merge2')
+const duplexify = require('duplexify')
+const extend = require('xtend/mutable')
+const reorder = require('./sort-transform')
+const { MAX_INT } = require('./utils')
 
 module.exports = function processMultiqueue ({ multiqueue, worker }) {
   const streams = {}
@@ -23,7 +28,14 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
   const splitter = through.obj(function (data, enc, cb) {
     const { lane } = data
     if (!streams[lane]) {
-      streams[lane] = createWorkerStream(lane)
+      streams[lane] = createSortingStream(lane)
+      pump(
+        streams[lane],
+        createWorkerStream(lane),
+        function (err) {
+          if (err) api.emit('error', err)
+        }
+      )
     }
 
     streams[lane].write(data)
@@ -36,8 +48,37 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
     splitter
   )
 
+  function createSortingStream (lane) {
+    const getCheckpoint = multiqueue.getLaneCheckpoint({ lane })
+
+    let checkpoint
+    let sortStream
+    const ensureCheckpoint = through.obj({ highWaterMark: MAX_INT }, co(function* (data, enc, cb) {
+      if (typeof checkpoint === 'undefined') {
+        checkpoint = yield getCheckpoint
+        if (typeof checkpoint === 'undefined') {
+          checkpoint = multiqueue.autoincrement ? 1 : 0
+        }
+
+        sortStream = reorder({
+          getPosition: data => data.seq,
+          start: checkpoint
+        })
+
+        duplex.setReadable(sortStream)
+      }
+
+      sortStream.write(data)
+      cb(null, data)
+    }))
+
+    const duplex = duplexify(null, null, { objectMode: true })
+    duplex.setWritable(ensureCheckpoint)
+    return duplex
+  }
+
   function createWorkerStream (lane) {
-    const transform = co(function* (data, enc, cb) {
+    return through.obj({ highWaterMark: 0 }, co(function* (data, enc, cb) {
       const { key, value } = data
       try {
         const maybePromise = worker({ lane, value })
@@ -49,9 +90,7 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
       }
 
       cb()
-    })
-
-    return through.obj({ highWaterMark: 1 }, transform)
+    }))
   }
 
   function start () {
@@ -69,7 +108,8 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
     return api
   }
 
-  const api = { start, pause, stop }
+  const api = new EventEmitter()
+  extend(api, { start, pause, stop })
   return api
 }
 
