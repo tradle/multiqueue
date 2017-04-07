@@ -54,11 +54,23 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
     return through.obj({ highWaterMark: 1 }, transform)
   }
 
-  return {
-    start: () => ee.emit('on'),
-    pause: () => ee.emit('off'),
-    stop: () => work.end()
+  function start () {
+    ee.emit('on')
+    return api
   }
+
+  function pause () {
+    ee.emit('off')
+    return api
+  }
+
+  function stop () {
+    work.end()
+    return api
+  }
+
+  const api = { start, pause, stop }
+  return api
 }
 
 function isPromise (obj) {
