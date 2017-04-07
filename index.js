@@ -1,5 +1,9 @@
 
+const createMultiqueue = require('./multiqueue')
+const processMultiqueue = require('./process')
 module.exports = {
-  createMultiqueue: require('./multiqueue'),
-  processMultiqueue: require('./process')
+  create: createMultiqueue,
+  createMultiqueue,
+  process: processMultiqueue,
+  processMultiqueue
 }
