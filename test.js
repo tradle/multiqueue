@@ -4,52 +4,113 @@ const Promise = require('bluebird')
 const co = Promise.coroutine
 const collect = Promise.promisify(require('stream-collector'))
 const memdb = require('memdb')
-const createQueues = require('./')
+const { createMultiqueue, processMultiqueue } = require('./')
 
 test('basic', co(function* (t) {
   const db = memdb({ valueEncoding: 'json' })
-  const queues = createQueues({ db })
-
-  const messages = [
+  const multiqueue = createMultiqueue({ db })
+  const objects = [
     {
-      from: 'bob',
-      message: { a: 1 },
+      lane: 'bob',
+      value: { a: 1 },
     },
     {
-      from: 'bob',
-      message: { b: 1 },
+      lane: 'bob',
+      value: { b: 1 },
     },
     {
-      from: 'carol',
-      message: { c: 1 }
+      lane: 'carol',
+      value: { c: 1 }
     }
   ]
 
-  const bodies = messages.map(m => m.message)
+  const bodies = objects.map(m => m.value)
   yield Promise.all([
-    queues.enqueue(messages[0]),
-    queues.enqueue(messages[1]),
-    queues.enqueue(messages[2])
+    multiqueue.enqueue(objects[0]),
+    multiqueue.enqueue(objects[1]),
+    multiqueue.enqueue(objects[2])
   ])
 
-  let toBob = yield collect(queues.queue('bob').createReadStream())
-  t.same(values(toBob), bodies.slice(0, 2))
+  const lanes = yield multiqueue.getLanes()
+  t.same(lanes, ['bob', 'carol'])
 
-  let queued = yield collect(queues.createReadStream())
+  let toBob = yield collect(multiqueue.queue('bob').createReadStream())
+  t.same(values(toBob), bodies.slice(0, 2))
+  t.ok(toBob.every(obj => obj.lane === 'bob'))
+
+  let queued = yield collect(multiqueue.createReadStream())
   t.same(values(queued), bodies)
 
-  yield queues.dequeue({ key: queued[0].key })
-  queued = yield collect(queues.createReadStream())
+  yield multiqueue.dequeue({ key: queued[0].key })
+  queued = yield collect(multiqueue.createReadStream())
   t.same(values(queued), bodies.slice(1))
 
-  toBob = yield collect(queues.queue('bob').createReadStream())
+  toBob = yield collect(multiqueue.queue('bob').createReadStream())
   t.same(values(toBob), bodies.slice(1, 2))
 
-  yield queues.queue('bob').dequeue({ key: toBob[0].key })
-  toBob = yield collect(queues.queue('bob').createReadStream())
+  yield multiqueue.queue('bob').dequeue({ key: toBob[0].key })
+  toBob = yield collect(multiqueue.queue('bob').createReadStream())
   t.same(values(toBob), [])
 
   t.end()
+}))
+
+test('live', function (t) {
+  const db = memdb({ valueEncoding: 'json' })
+  const multiqueue = createMultiqueue({ db })
+  const live = multiqueue.createReadStream({ live: true })
+  live.on('data', co(function* (data) {
+    live.end()
+    t.equal(data.lane, 'bob')
+    t.same(data.value, { a: 1 })
+    yield multiqueue.dequeue(data)
+    t.same(yield collect(multiqueue.createReadStream()), [])
+    t.end()
+  }))
+
+  multiqueue.enqueue({
+    lane: 'bob',
+    value: { a: 1 }
+  })
+})
+
+test('process', co(function* (t) {
+  t.plan(9)
+
+  const db = memdb({ valueEncoding: 'json' })
+  const multiqueue = createMultiqueue({ db })
+  const lanes = ['bob', 'carol', 'dave']
+
+  for (let i = 0; i < 2; i++) {
+    lanes.forEach(lane => {
+      multiqueue.enqueue({
+        lane,
+        value: { count: i }
+      })
+    })
+  }
+
+  const concurrency = {}
+  const running = {}
+  processMultiqueue({ multiqueue, worker }).start()
+
+  function worker ({ lane, value }) {
+    running[lane] = true
+    if (value.count === 1) {
+      t.ok(lanes.every(lane => running[lane]), 'concurrency inter-lane')
+    }
+
+    if (!(lane in concurrency)) concurrency[lane] = 0
+
+    t.equal(++concurrency[lane], 1, 'sequence intra-lane')
+
+    return new Promise(resolve => {
+      setTimeout(function () {
+        concurrency[lane]--
+        resolve()
+      }, 100)
+    })
+  }
 }))
 
 function values (arr) {
