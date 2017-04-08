@@ -23,72 +23,36 @@ const {
 const SEPARATOR = '!'
 const LANE_CHECKPOINT_PREFIX = '\x00'
 
-module.exports = function createQueues ({
-  db,
-  separator=SEPARATOR,
-  autoincrement=true
-}) {
+module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement=true }) {
   const { valueEncoding } = db.options
   Promise.promisifyAll(db)
   const queues = {}
   const ee = new EventEmitter()
   const tips = {}
 
-  function getQueue (identifier) {
-    if (!queues[identifier]) {
-      queues[identifier] = createQueue(identifier)
-    }
-
-    return queues[identifier]
-  }
-
-  function getAutoincrementEnqueue ({ db, lane }) {
-    const feed = Promise.promisifyAll(changesFeed(db))
-    return co(function* ({ value }) {
-      const { change } = yield feed.appendAsync(value)
-      return getKey({ lane, seq: change })
-    })
-  }
-
-  function getManualIncrementEnqueue ({ db, lane }) {
-    return co(function* ({ value, seq }) {
-      const key = getKey({ lane, seq })
-      yield db.putAsync(key, value)
-      return key
-    })
-  }
-
-  function getInternalQueueAPI ({ db, lane }) {
-    const sub = subdown(db, lane, { valueEncoding, separator })
-    Promise.promisifyAll(sub)
-
-    const opts = { db: sub, lane }
-    return {
-      get prefix () {
-        return sub.db.prefix
-      },
-      enqueue: autoincrement ? getAutoincrementEnqueue(opts) : getManualIncrementEnqueue(opts),
-      checkpoint: lane => getLaneCheckpoint({ lane }),
-      tip: lane => getTip(opts)
-    }
-  }
-
-  const getTip = co(function* ({ db, lane }) {
-    let tip = tips[lane]
-    if (typeof tip !== 'undefined') {
-      return tip
-    }
-
-    if (autoincrement) {
-      tip = yield firstInStream(db.createReadStream({
+  const implAutoincrement = {
+    tip: function ({ lane }) {
+      // autoincrement is always in order
+      return firstInStream(createQueueStream(lane, {
         reverse: true,
         limit: 1
       }))
-    } else {
+    },
+    enqueuer: function ({ db, lane }) {
+      const feed = Promise.promisifyAll(changesFeed(db))
+      return co(function* ({ value }) {
+        const { change } = yield feed.appendAsync(value)
+        return getKey({ lane, seq: change })
+      })
+    }
+  }
+
+  const implCustom = {
+    tip: function ({ lane }) {
       let prev = -1
-      tip = yield new Promise(resolve => {
-        const stream = db.createReadStream({ values: false })
-          .on('data', ({ key }) => {
+      return new Promise(resolve => {
+        const stream = createQueueStream(lane, { values: false })
+          .on('data', key => {
             const { seq } = parseKey(key)
             if (prev && seq > prev + 1) {
               // we hit a gap
@@ -100,9 +64,48 @@ module.exports = function createQueues ({
           })
           .on('end', () => resolve(prev))
       })
+    },
+    enqueuer: function ({ db, lane }) {
+      return co(function* ({ value, seq }) {
+        const key = getKey({ lane, seq })
+        yield db.putAsync(key, value)
+        return key
+      })
+    }
+  }
+
+  const impl = autoincrement ? implAutoincrement : implCustom
+
+  function getQueue (identifier) {
+    if (!queues[identifier]) {
+      queues[identifier] = createQueue(identifier)
     }
 
-    tips[lane] = tip
+    return queues[identifier]
+  }
+
+  function getInternalQueueAPI ({ db, lane }) {
+    const sub = subdown(db, lane, { valueEncoding, separator })
+    Promise.promisifyAll(sub)
+
+    const opts = { db: sub, lane }
+    return {
+      get prefix () {
+        return sub.db.prefix
+      },
+      enqueue: impl.enqueuer(opts),
+      checkpoint: lane => getLaneCheckpoint({ lane }),
+      tip: impl.tip
+    }
+  }
+
+  const getTip = co(function* ({ lane }) {
+    let tip = tips[lane]
+    if (typeof tip !== 'undefined') {
+      return tip
+    }
+
+    tip = tips[lane] = yield impl.tip({ lane })
     return tip
   })
 
@@ -112,11 +115,11 @@ module.exports = function createQueues ({
 
   function createQueue (lane) {
     const internal = getInternalQueueAPI({ db, lane })
-    const getTip = internal.tip()
+    const promiseTip = getTip({ lane })
     let tip
 
     const enqueue = co(function* ({ value, seq }) {
-      if (!tip) tip = yield getTip
+      if (!tip) tip = yield promiseTip
 
       const key = yield internal.enqueue({ value, seq })
       if (tips[lane] + 1 === seq) {
@@ -126,24 +129,25 @@ module.exports = function createQueues ({
       return { key, value, lane, tip, seq }
     })
 
-    function createQueueStream (opts) {
-      opts = clone(opts)
-      opts.gt = queue.prefix
-      opts.lt = queue.prefix + '\xff'
-      return createReadStream(opts)
-    }
-
     const queue = queues[lane] = {
       enqueue,
       dequeue,
-      createReadStream: createQueueStream,
+      createReadStream: createQueueStream.bind(null, lane),
       get prefix () {
-        return internal.prefix
+        return getLanePrefix(lane)
       },
       tip: internal.tip
     }
 
     return queues[lane]
+  }
+
+  function createQueueStream (lane, opts) {
+    opts = clone(opts)
+    const prefix = getLanePrefix(lane)
+    opts.gt = prefix
+    opts.lt = prefix + '\xff'
+    return createReadStream(opts)
   }
 
   const enqueue = co(function* ({ value, lane, seq }) {
