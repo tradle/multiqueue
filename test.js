@@ -35,6 +35,9 @@ test('basic', co(function* (t) {
     multiqueue.enqueue(objects[2])
   ])
 
+  const tip = yield multiqueue.queue('bob').tip()
+  t.equal(tip, 2)
+
   const lanes = yield multiqueue.getLanes()
   t.same(lanes, ['bob', 'carol'])
 
@@ -136,7 +139,7 @@ test('order', function (t) {
 
 test('custom seq', co(function* (t) {
   const items = [5, 2, 4, 0, 3, 1]
-  t.plan(items.length)
+  t.plan(items.length + 1)
 
   const db = memdb({ valueEncoding: 'json' })
   const multiqueue = createMultiqueue({ db, autoincrement: false })
@@ -144,13 +147,20 @@ test('custom seq', co(function* (t) {
   // multiqueue.on('tip', tip => console.log('tip', tip))
   // multiqueue.on('have', have => console.log('have', have))
 
-  items.forEach(i => {
-    multiqueue.enqueue({
+  // multiqueue.on('tip', function ({ lane, tip }) {
+  //   console.log('tip', tip)
+  // })
+
+  yield Promise.all(items.map(i => {
+    return multiqueue.enqueue({
       lane: 'bob',
       value: { i },
       seq: i
     })
-  })
+  }))
+
+  const tip = yield multiqueue.queue('bob').tip()
+  t.equal(tip, 5)
 
   processMultiqueue({ multiqueue, worker }).start()
 

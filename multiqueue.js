@@ -1,5 +1,4 @@
 
-const { EventEmitter } = require('events')
 const Promise = require('bluebird')
 const co = Promise.coroutine
 const collect = Promise.promisify(require('stream-collector'))
@@ -11,6 +10,7 @@ const through = require('through2')
 const extend = require('xtend/mutable')
 // const CombinedStream = require('combined-stream2')
 const merge = require('merge2')
+const AsyncEmitter = require('./async-emitter')
 const {
   hexint,
   unhexint,
@@ -27,17 +27,36 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
   const { valueEncoding } = db.options
   Promise.promisifyAll(db)
   const queues = {}
-  const ee = new EventEmitter()
+  const ee = new AsyncEmitter()
   const tips = {}
+  const have = {}
+
+  function markHave ({ lane, seq }) {
+    if (!have[lane]) have[lane] = {}
+
+    have[lane][seq] = true
+  }
+
+  function clearHave ({ lane, seq }) {
+    if (have[lane]) {
+      if (have[lane][seq]) {
+        delete have[lane][seq]
+        return true
+      }
+    }
+  }
 
   const implAutoincrement = {
-    tip: function ({ lane }) {
+    tip: co(function* ({ lane }) {
       // autoincrement is always in order
-      return firstInStream(createQueueStream(lane, {
+      const result = yield firstInStream(createQueueStream(lane, {
+        values: false,
         reverse: true,
         limit: 1
       }))
-    },
+
+      if (result) return result.seq
+    }),
     enqueuer: function ({ db, lane }) {
       const feed = Promise.promisifyAll(changesFeed(db))
       return co(function* ({ value }) {
@@ -60,8 +79,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
       let prev = -1
       return new Promise(resolve => {
         const stream = createQueueStream(lane, { values: false })
-          .on('data', key => {
-            const { seq } = parseKey(key)
+          .on('data', function ({ seq }) {
             if (prev && seq > prev + 1) {
               // we hit a gap
               resolve(prev)
@@ -101,8 +119,8 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
         return sub.db.prefix
       },
       enqueue: impl.enqueuer(opts),
-      checkpoint: lane => getLaneCheckpoint({ lane }),
-      tip: impl.tip,
+      checkpoint: () => getLaneCheckpoint({ lane }),
+      tip: () => impl.tip({ lane }),
       // createReadStream: function (opts) {
       //   return pump(
       //     sub.createReadStream(opts),
@@ -131,14 +149,32 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     const promiseTip = getTip({ lane })
     let tip
 
-    const enqueue = co(function* ({ value, seq }) {
-      if (!tip) tip = yield promiseTip
+    const updateTip = co(function* ({ seq }) {
+      if (typeof tip === 'undefined') tip = yield promiseTip
 
-      seq = yield internal.enqueue({ value, seq })
+      let newTip = tip
       if (tips[lane] + 1 === seq) {
-        tip = tips[lane] = seq
+        clearHave({ lane, seq })
+        newTip = seq
+      } else {
+        markHave({ lane, seq })
       }
 
+      while (clearHave({ lane, seq: newTip + 1 })) {
+        newTip++
+      }
+
+      if (newTip !== tip) {
+        tip = tips[lane] = newTip
+        ee.emitAsync('tip', { lane, tip })
+      }
+
+      return tip
+    })
+
+    const enqueue = co(function* ({ value, seq }) {
+      seq = yield internal.enqueue({ value, seq })
+      const tip = yield updateTip({ seq })
       const key = getKey({ lane, seq })
       return { key, value, lane, tip, seq }
     })
@@ -150,7 +186,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
       get prefix () {
         return getLanePrefix(lane)
       },
-      tip: internal.tip
+      tip: () => getTip({ lane })
     }
 
     return queues[lane]
@@ -173,10 +209,10 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
 
     validateEncoding({ value, encoding: valueEncoding })
     const data = yield getQueue(lane).enqueue({ value, seq })
-    ee.emit('enqueue', data)
+    ee.emitAsync('enqueue', data)
   })
 
-  function dequeue ({ key }) {
+  const dequeue = co(function* ({ key }) {
     assert(typeof key === 'string', 'expected string "key"')
     const { lane, seq } = parseKey(key)
     const batch = [
@@ -184,8 +220,9 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
       { type: 'put', key: LANE_CHECKPOINT_PREFIX + lane, value: seq }
     ]
 
-    return db.batchAsync(batch)
-  }
+    yield db.batchAsync(batch)
+    ee.emitAsync('dequeue', { lane, seq })
+  })
 
   function getLaneCheckpoint ({ lane }) {
     return firstInStream(db.createReadStream({
@@ -285,6 +322,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
   return extend(ee, {
     autoincrement,
     queue: getQueue,
+    lane: getQueue,
     enqueue,
     dequeue,
     createReadStream,

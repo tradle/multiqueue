@@ -9,6 +9,7 @@ const duplexify = require('duplexify')
 const extend = require('xtend/mutable')
 const reorder = require('./sort-transform')
 const { MAX_INT } = require('./utils')
+const AsyncEmitter = require('./async-emitter')
 
 module.exports = function processMultiqueue ({ multiqueue, worker }) {
   const streams = {}
@@ -92,6 +93,7 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
         return cb(err)
       }
 
+      api.emitAsync('processed', data)
       cb()
     }))
   }
@@ -111,7 +113,7 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
     return api
   }
 
-  const api = new EventEmitter()
+  const api = new AsyncEmitter()
   extend(api, { start, pause, stop })
   return api
 }
