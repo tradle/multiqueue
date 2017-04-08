@@ -42,7 +42,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
       const feed = Promise.promisifyAll(changesFeed(db))
       return co(function* ({ value }) {
         const { change } = yield feed.appendAsync(value)
-        return getKey({ lane, seq: change })
+        return change
       })
     }
   }
@@ -75,9 +75,8 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     },
     enqueuer: function ({ db, lane }) {
       return co(function* ({ value, seq }) {
-        const key = getKey({ lane, seq })
-        yield db.putAsync(key, value)
-        return key
+        yield db.putAsync(hexint(seq), value)
+        return seq
       })
     }
   }
@@ -135,11 +134,12 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     const enqueue = co(function* ({ value, seq }) {
       if (!tip) tip = yield promiseTip
 
-      const key = yield internal.enqueue({ value, seq })
+      seq = yield internal.enqueue({ value, seq })
       if (tips[lane] + 1 === seq) {
         tip = tips[lane] = seq
       }
 
+      const key = getKey({ lane, seq })
       return { key, value, lane, tip, seq }
     })
 
