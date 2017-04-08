@@ -32,6 +32,7 @@ module.exports = function createQueues ({
   Promise.promisifyAll(db)
   const queues = {}
   const ee = new EventEmitter()
+  const tips = {}
 
   function getQueue (identifier) {
     if (!queues[identifier]) {
@@ -67,19 +68,62 @@ module.exports = function createQueues ({
         return sub.db.prefix
       },
       enqueue: autoincrement ? getAutoincrementEnqueue(opts) : getManualIncrementEnqueue(opts),
-      checkpoint: lane => getLaneCheckpoint({ lane })
+      checkpoint: lane => getLaneCheckpoint({ lane }),
+      tip: lane => getTip(opts)
     }
   }
+
+  const getTip = co(function* ({ db, lane }) {
+    let tip = tips[lane]
+    if (typeof tip !== 'undefined') {
+      return tip
+    }
+
+    if (autoincrement) {
+      tip = yield firstInStream(db.createReadStream({
+        reverse: true,
+        limit: 1
+      }))
+    } else {
+      let prev = -1
+      tip = yield new Promise(resolve => {
+        const stream = db.createReadStream({ values: false })
+          .on('data', ({ key }) => {
+            const { seq } = parseKey(key)
+            if (prev && seq > prev + 1) {
+              // we hit a gap
+              resolve(prev)
+              stream.destroy()
+            }
+
+            prev = seq
+          })
+          .on('end', () => resolve(prev))
+      })
+    }
+
+    tips[lane] = tip
+    return tip
+  })
 
   function getKey ({ lane, seq }) {
     return getLanePrefix(lane) + hexint(seq)
   }
 
   function createQueue (lane) {
-    const api = getInternalQueueAPI({ db, lane })
+    const internal = getInternalQueueAPI({ db, lane })
+    const getTip = internal.tip()
+    let tip
+
     const enqueue = co(function* ({ value, seq }) {
-      const key = yield api.enqueue({ value, seq })
-      return { key, value, lane }
+      if (!tip) tip = yield getTip
+
+      const key = yield internal.enqueue({ value, seq })
+      if (tips[lane] + 1 === seq) {
+        tip = tips[lane] = seq
+      }
+
+      return { key, value, lane, tip, seq }
     })
 
     function createQueueStream (opts) {
@@ -94,8 +138,9 @@ module.exports = function createQueues ({
       dequeue,
       createReadStream: createQueueStream,
       get prefix () {
-        return api.prefix
-      }
+        return internal.prefix
+      },
+      tip: internal.tip
     }
 
     return queues[lane]
@@ -210,7 +255,7 @@ module.exports = function createQueues ({
     }
   }
 
-  return Object.freeze({
+  return extend(ee, {
     autoincrement,
     queue: getQueue,
     enqueue,

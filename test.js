@@ -8,7 +8,7 @@ const through = require('through2')
 const pump = require('pump')
 const { PassThrough } = require('readable-stream')
 const reorder = require('./sort-transform')
-const { createMultiqueue, processMultiqueue } = require('./')
+const { createMultiqueue, processMultiqueue, monitorMissing } = require('./')
 
 test('basic', co(function* (t) {
   const db = memdb({ valueEncoding: 'json' })
@@ -140,6 +140,9 @@ test('custom seq', co(function* (t) {
 
   const db = memdb({ valueEncoding: 'json' })
   const multiqueue = createMultiqueue({ db, autoincrement: false })
+  // multiqueue.on('missing', e => console.log('missing', e))
+  // multiqueue.on('tip', tip => console.log('tip', tip))
+  // multiqueue.on('have', have => console.log('have', have))
 
   items.forEach(i => {
     multiqueue.enqueue({
@@ -156,6 +159,26 @@ test('custom seq', co(function* (t) {
     t.equal(value.i, i++)
   }
 }))
+
+test('monitor missing', function (t) {
+  const db = memdb({ valueEncoding: 'json' })
+  const multiqueue = createMultiqueue({ db, autoincrement: false })
+  const monitor = monitorMissing({ multiqueue, debounce: 50, unref: false })
+
+  ;[5, 2].forEach(i => {
+    multiqueue.enqueue({
+      lane: 'bob',
+      value: { i },
+      seq: i
+    })
+  })
+
+  monitor.on('batch', function ({ lane, missing }) {
+    t.equal(lane, 'bob')
+    t.same(missing, [0, 1, 3, 4])
+    t.end()
+  })
+})
 
 function values (arr) {
   return arr.map(obj => obj.value)
