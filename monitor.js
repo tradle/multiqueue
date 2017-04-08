@@ -39,19 +39,13 @@ module.exports = function monitorMissing ({ multiqueue, debounce=1000, unref }) 
       .sort(sortAscending)
   }
 
-  function getLaneCache (lane) {
-    if (!missing[lane]) missing[lane] = []
-
-    return missing[lane]
-  }
-
   function update (lane) {
     clearTimeout(timeouts[lane])
     const timeout = timeouts[lane] = setTimeout(() => {
-      ee.emit('batch', {
-        lane,
-        missing: ee.missing({ lane })
-      })
+      const missing = ee.missing({ lane })
+      if (missing.length) {
+        ee.emit('batch', { lane, missing })
+      }
     }, debounce)
 
     if (unref && timeout.unref) timeout.unref()

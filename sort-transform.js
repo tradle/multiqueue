@@ -15,6 +15,7 @@ module.exports = function enforceOrder ({ start=0, getPosition }) {
       last = seq
       debug(`allowing item: ${seq}`)
       this.push(data)
+      let item
       while (item = buffer.get(++seq)) {
         debug(`pushing delayed item: ${seq}`)
         buffer.delete(seq)
