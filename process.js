@@ -57,12 +57,15 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
       if (typeof checkpoint === 'undefined') {
         checkpoint = yield getCheckpoint
         if (typeof checkpoint === 'undefined') {
-          checkpoint = multiqueue.autoincrement ? 1 : 0
+          // autoincrement: changes-feed starts at 1
+          // normally we start at 0
+          // checkpoint is seq of the last processed item
+          checkpoint = multiqueue.autoincrement ? 0 : -1
         }
 
         sortStream = reorder({
           getPosition: data => data.seq,
-          start: checkpoint
+          start: checkpoint + 1
         })
 
         duplex.setReadable(sortStream)
