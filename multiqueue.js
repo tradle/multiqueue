@@ -47,6 +47,14 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     }
   }
 
+  function getQueueKeyRange ({ lane }) {
+    const prefix = getLanePrefix(lane)
+    return {
+      gt: prefix,
+      lt: prefix + '\xff'
+    }
+  }
+
   const implCustom = {
     tip: function ({ lane }) {
       let prev = -1
@@ -95,7 +103,13 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
       },
       enqueue: impl.enqueuer(opts),
       checkpoint: lane => getLaneCheckpoint({ lane }),
-      tip: impl.tip
+      tip: impl.tip,
+      // createReadStream: function (opts) {
+      //   return pump(
+      //     sub.createReadStream(opts),
+      //     keyParser(opts)
+      //   )
+      // }
     }
   }
 
@@ -143,10 +157,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
   }
 
   function createQueueStream (lane, opts) {
-    opts = clone(opts)
-    const prefix = getLanePrefix(lane)
-    opts.gt = prefix
-    opts.lt = prefix + '\xff'
+    opts = extend(getQueueKeyRange({ lane }), opts)
     return createReadStream(opts)
   }
 
@@ -186,11 +197,11 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
   }
 
   function createReadStream (opts={}) {
-    const old = db.createReadStream(clone(opts, {
+    const old = db.createReadStream(extend({
       keys: true,
       values: true,
       gt: separator
-    }))
+    }, opts))
 
     const merged = merge([old], { end: !opts.live })
     if (opts.live) {
@@ -206,13 +217,21 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
       }
     }
 
-    return pump(
-      merged,
-      through.obj(function (data, enc, cb) {
+    return pump(merged, keyParser(opts))
+  }
+
+  function keyParser (opts) {
+    return through.obj(function (data, enc, cb) {
+      if (opts.keys !== false) {
+        if (opts.values === false) {
+          return cb(null, parseKey(data))
+        }
+
         extend(data, parseKey(data.key))
-        cb(null, data)
-      })
-    )
+      }
+
+      cb(null, data)
+    })
   }
 
   const getNextLane = co(function* (lane) {
@@ -252,6 +271,10 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
   }
 
   function parseKey (key) {
+    // if (key.slice(0, separator.length) !== separator) {
+    //   return { seq: unhexint(key) }
+    // }
+
     const [ignore, lane, seq] = key.split(separator)
     return {
       lane,
