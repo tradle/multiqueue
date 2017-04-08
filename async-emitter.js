@@ -5,12 +5,12 @@ function AsyncEmitter () {
   EventEmitter.call(this)
 }
 
+inherits(AsyncEmitter, EventEmitter)
+
 AsyncEmitter.prototype.emitAsync = function (...args) {
   process.nextTick(() => {
     EventEmitter.prototype.emit.call(this, ...args)
   })
 }
-
-inherits(AsyncEmitter, EventEmitter)
 
 module.exports = AsyncEmitter
