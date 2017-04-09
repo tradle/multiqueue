@@ -1,8 +1,9 @@
 
 const test = require('tape')
-const Promise = require('bluebird')
-const co = Promise.coroutine
-const collect = Promise.promisify(require('stream-collector'))
+const Promise = require('any-promise')
+const co = require('co').wrap
+const promisify = require('pify')
+const collect = promisify(require('stream-collector'))
 const memdb = require('memdb')
 const through = require('through2')
 const pump = require('pump')

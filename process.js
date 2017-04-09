@@ -1,7 +1,7 @@
 
 const { EventEmitter } = require('events')
-const Promise = require('bluebird')
-const co = Promise.coroutine
+const Promise = require('any-promise')
+const co = require('co').wrap
 const pump = require('pump')
 const through = require('through2')
 const merge = require('merge2')

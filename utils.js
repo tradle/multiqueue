@@ -1,7 +1,8 @@
 const lexint = require('lexicographic-integer')
-const Promise = require('bluebird')
-const co = Promise.coroutine
-const collect = Promise.promisify(require('stream-collector'))
+const Promise = require('any-promise')
+const co = require('co').wrap
+const promisify = require('pify')
+const collect = promisify(require('stream-collector'))
 const through = require('through2')
 const MAX_INT = 2147483647
 

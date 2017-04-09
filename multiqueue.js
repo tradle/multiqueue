@@ -1,7 +1,8 @@
 
-const Promise = require('bluebird')
-const co = Promise.coroutine
-const collect = Promise.promisify(require('stream-collector'))
+const Promise = require('any-promise')
+const co = require('co').wrap
+const promisify = require('pify')
+const collect = promisify(require('stream-collector'))
 const clone = require('xtend')
 const changesFeed = require('changes-feed')
 const subdown = require('subleveldown')
@@ -25,7 +26,7 @@ const LANE_CHECKPOINT_PREFIX = '\x00'
 
 module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement=true }) {
   const { valueEncoding } = db.options
-  Promise.promisifyAll(db)
+  const batchAsync = promisify(db.batch.bind(db))
   const queues = {}
   const ee = new AsyncEmitter()
   const tips = {}
@@ -58,9 +59,10 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
       if (result) return result.seq
     }),
     enqueuer: function ({ db, lane }) {
-      const feed = Promise.promisifyAll(changesFeed(db))
+      const feed = changesFeed(db)
+      const append = promisify(feed.append.bind(feed))
       return co(function* ({ value }) {
-        const { change } = yield feed.appendAsync(value)
+        const { change } = yield append(value)
         return change
       })
     }
@@ -92,8 +94,9 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
       })
     },
     enqueuer: function ({ db, lane }) {
+      const putAsync = promisify(db.put.bind(db))
       return co(function* ({ value, seq }) {
-        yield db.putAsync(hexint(seq), value)
+        yield putAsync(hexint(seq), value)
         return seq
       })
     }
@@ -111,8 +114,6 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
 
   function getInternalQueueAPI ({ db, lane }) {
     const sub = subdown(db, lane, { valueEncoding, separator })
-    Promise.promisifyAll(sub)
-
     const opts = { db: sub, lane }
     return {
       get prefix () {
@@ -220,7 +221,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
       { type: 'put', key: LANE_CHECKPOINT_PREFIX + lane, value: seq }
     ]
 
-    yield db.batchAsync(batch)
+    yield batchAsync(batch)
     ee.emitAsync('dequeue', { lane, seq })
   })
 
@@ -240,7 +241,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
       gt: separator
     }, opts))
 
-    const merged = merge([old], { end: !opts.live })
+    const merged = merge(old, { end: !opts.live })
     if (opts.live) {
       const live = createPassThrough()
       ee.on('enqueue', onEnqueue)
@@ -312,11 +313,10 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     //   return { seq: unhexint(key) }
     // }
 
-    const [ignore, lane, seq] = key.split(separator)
-    return {
-      lane,
-      seq: unhexint(seq)
-    }
+    const parts = key.split(separator)
+    const seq = unhexint(parts.pop())
+    const lane = parts.pop()
+    return { lane, seq }
   }
 
   return extend(ee, {
