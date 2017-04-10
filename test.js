@@ -1,3 +1,4 @@
+require('any-promise/register/bluebird')
 
 const test = require('tape')
 const Promise = require('any-promise')
@@ -190,6 +191,33 @@ test('monitor missing', function (t) {
     t.end()
   })
 })
+
+test('batch enqueue', co(function* (t) {
+  const n = 5
+  t.plan(n + 1)
+
+  const db = memdb({ valueEncoding: 'json' })
+  const multiqueue = createMultiqueue({ db, autoincrement: false })
+  yield multiqueue.batchEnqueue({
+    lane: 'bob',
+    data: new Array(n).fill(0).map((n, i) => {
+      return {
+        seq: i,
+        value: { i }
+      }
+    })
+  })
+
+  const tip = yield multiqueue.queue('bob').tip()
+  t.equal(tip, n - 1)
+
+  processMultiqueue({ multiqueue, worker }).start()
+
+  let i = 0
+  function worker ({ lane, value }) {
+    t.equal(value.i, i++)
+  }
+}))
 
 function values (arr) {
   return arr.map(obj => obj.value)

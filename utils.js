@@ -12,6 +12,9 @@ const firstInStream = co(function* (stream) {
 })
 
 module.exports = {
+  Promise,
+  co,
+  promisify,
   assert,
   validateEncoding,
   createPassThrough,

@@ -12,6 +12,8 @@ const extend = require('xtend/mutable')
 // const CombinedStream = require('combined-stream2')
 const merge = require('merge2')
 const AsyncEmitter = require('./async-emitter')
+const implAutoincrement = require('./impl-autoincrement')
+const implCustomSeq = require('./impl-custom-seq')
 const {
   hexint,
   unhexint,
@@ -47,27 +49,6 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     }
   }
 
-  const implAutoincrement = {
-    tip: co(function* ({ lane }) {
-      // autoincrement is always in order
-      const result = yield firstInStream(createQueueStream(lane, {
-        values: false,
-        reverse: true,
-        limit: 1
-      }))
-
-      if (result) return result.seq
-    }),
-    enqueuer: function ({ db, lane }) {
-      const feed = changesFeed(db)
-      const append = promisify(feed.append.bind(feed))
-      return co(function* ({ value }) {
-        const { change } = yield append(value)
-        return change
-      })
-    }
-  }
-
   function getQueueKeyRange ({ lane }) {
     const prefix = getLanePrefix(lane)
     return {
@@ -76,33 +57,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     }
   }
 
-  const implCustom = {
-    tip: function ({ lane }) {
-      let prev = -1
-      return new Promise(resolve => {
-        const stream = createQueueStream(lane, { values: false })
-          .on('data', function ({ seq }) {
-            if (prev && seq > prev + 1) {
-              // we hit a gap
-              resolve(prev)
-              stream.destroy()
-            }
-
-            prev = seq
-          })
-          .on('end', () => resolve(prev))
-      })
-    },
-    enqueuer: function ({ db, lane }) {
-      const putAsync = promisify(db.put.bind(db))
-      return co(function* ({ value, seq }) {
-        yield putAsync(hexint(seq), value)
-        return seq
-      })
-    }
-  }
-
-  const impl = autoincrement ? implAutoincrement : implCustom
+  const impl = (autoincrement ? implAutoincrement : implCustomSeq)({ createQueueStream })
 
   function getQueue (identifier) {
     if (!queues[identifier]) {
@@ -119,7 +74,8 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
       get prefix () {
         return sub.db.prefix
       },
-      enqueue: impl.enqueuer(opts),
+      batchEnqueue: impl.batchEnqueuer(opts),
+      // enqueue: impl.enqueuer(opts),
       checkpoint: () => getLaneCheckpoint({ lane }),
       tip: () => impl.tip({ lane }),
       // createReadStream: function (opts) {
@@ -174,15 +130,37 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     })
 
     const enqueue = co(function* ({ value, seq }) {
-      seq = yield internal.enqueue({ value, seq })
-      const tip = yield updateTip({ seq })
-      const key = getKey({ lane, seq })
-      return { key, value, lane, tip, seq }
+      const results = yield batchEnqueue({
+        data: [{ value, seq }]
+      })
+
+      return results[0]
+    })
+
+    const batchEnqueue = co(function* ({ data }) {
+      data = data.slice()
+      if (!autoincrement) {
+        data.sort(sortAscendingBySeq)
+      }
+
+      const seqs = yield internal.batchEnqueue({ data })
+      let tip
+      for (let seq of seqs) {
+        tip = yield updateTip({ seq })
+      }
+
+      return data.map((item, i) => {
+        const { value } = item
+        const seq = seqs[i]
+        const key = getKey({ lane, seq })
+        return { key, value, lane, tip, seq }
+      })
     })
 
     const queue = queues[lane] = {
       enqueue,
       dequeue,
+      batchEnqueue,
       createReadStream: createQueueStream.bind(null, lane),
       get prefix () {
         return getLanePrefix(lane)
@@ -198,19 +176,33 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     return createReadStream(opts)
   }
 
-  const enqueue = co(function* ({ value, lane, seq }) {
+  function validateLaneName (lane) {
     assert(typeof lane === 'string', 'expected string "lane"')
-    if (!autoincrement) {
-      assert(typeof seq === 'number', 'expected "seq"')
-    }
-
     if (lane.indexOf(separator) !== -1) {
       throw new Error('"lane" must not contain "separator"')
+    }
+  }
+
+  const enqueue = co(function* ({ value, lane, seq }) {
+    validateLaneName(lane)
+    if (!autoincrement) {
+      assert(typeof seq === 'number', 'expected "seq"')
     }
 
     validateEncoding({ value, encoding: valueEncoding })
     const data = yield getQueue(lane).enqueue({ value, seq })
     ee.emitAsync('enqueue', data)
+  })
+
+  const batchEnqueue = co(function* ({ lane, data }) {
+    validateLaneName(lane)
+    if (!autoincrement) {
+      assert(data.every(data => typeof data.seq === 'number'), 'expected every item to have a "seq"')
+    }
+
+    data.forEach(data => validateEncoding({ value: data.value, encoding: valueEncoding }))
+    const results = yield getQueue(lane).batchEnqueue({ lane, data })
+    results.forEach(item => ee.emitAsync('enqueue', item))
   })
 
   const dequeue = co(function* ({ key }) {
@@ -323,6 +315,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     autoincrement,
     queue: getQueue,
     lane: getQueue,
+    batchEnqueue,
     enqueue,
     dequeue,
     createReadStream,
@@ -330,4 +323,8 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     getNextLane,
     getLaneCheckpoint
   })
+}
+
+function sortAscendingBySeq (a, b) {
+  return a.seq - b.seq
 }
