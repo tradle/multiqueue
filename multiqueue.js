@@ -29,6 +29,7 @@ const LANE_CHECKPOINT_PREFIX = '\x00'
 module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement=true }) {
   const { valueEncoding } = db.options
   const batchAsync = promisify(db.batch.bind(db))
+  const delAsync = promisify(db.del.bind(db))
   const queues = {}
   const ee = new AsyncEmitter()
   const tips = {}
@@ -80,6 +81,22 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
   function getKey ({ lane, seq }) {
     return getLanePrefix(lane) + hexint(seq)
   }
+
+  const clearQueue = co(function* ({ lane }) {
+    yield Promise.all([
+      yield collect(pump(
+        db.createReadStream(extend({
+          values: false
+        }, getQueueKeyRange({ lane }))),
+        through.obj(function (key, enc, cb) {
+          db.del(key, cb)
+        })
+      )),
+      delAsync(LANE_CHECKPOINT_PREFIX + lane)
+    ])
+
+    delete tips[lane]
+  })
 
   function createQueue (lane) {
     const sub = subdown(db, lane, { valueEncoding, separator })
@@ -143,7 +160,9 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
       dequeue,
       batchEnqueue,
       createReadStream: createQueueStream.bind(null, lane),
-      tip: () => getTip({ lane })
+      tip: () => getTip({ lane }),
+      clear: () => clearQueue({ lane }),
+      checkpoint: () => getLaneCheckpoint({ lane })
     }
 
     return queues[lane]

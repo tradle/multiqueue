@@ -19,7 +19,7 @@ module.exports = function createAutoincrementBased ({ createQueueStream }) {
         limit: 1
       }))
 
-      if (result) return result.seq
+      return result ? result.seq : 0
     }),
     batchEnqueuer: function ({ db, lane }) {
       const append = getAppend(db)

@@ -50,7 +50,7 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
   }
 
   function createSortingStream (lane) {
-    const getCheckpoint = multiqueue.getLaneCheckpoint({ lane })
+    const getCheckpoint = multiqueue.queue(lane).checkpoint()
 
     let checkpoint
     let sortStream

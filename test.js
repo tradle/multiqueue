@@ -131,6 +131,65 @@ test('queue basics - enqueue, queued, tip, dequeue', co(function* (t) {
   t.end()
 }))
 
+test('queue interface', co(function* (t) {
+  const items = genSequence(0, 3)
+  const db = memdb({ valueEncoding: 'json' })
+  const multiqueue = createMultiqueue({ db })
+  const bob = multiqueue.queue('lane')
+  yield Promise.all(items.map(i => {
+    return bob.enqueue({
+      value: { i },
+      seq: i
+    })
+  }))
+
+  t.equal(yield bob.tip(), items.length)
+
+  let toBob = yield collect(bob.createReadStream())
+  t.same(values(toBob).map(val => val.i), items)
+
+  yield bob.dequeue({ key: toBob[0].key })
+
+  toBob = yield collect(bob.createReadStream())
+  t.same(values(toBob).map(val => val.i), items.slice(1))
+
+  t.end()
+}))
+
+test('clear', co(function* (t) {
+  yield Promise.all([true, false].map(co(function* (autoincrement) {
+    const items = genSequence(0, 3)
+    const preTip = autoincrement ? 0 : -1
+    const postTip = autoincrement ? items.length : items.length - 1
+    const db = memdb({ valueEncoding: 'json' })
+    const multiqueue = createMultiqueue({ db, autoincrement })
+    // const bob = multiqueue.queue('bob')
+    // const alice = multiqueue.queue('alice')
+    const lanes = ['alice', 'bob']
+    yield Promise.all(lanes.map(co(function* (lane) {
+      yield Promise.all(items.map((n, i) => {
+        return multiqueue.enqueue({
+          lane,
+          value: { i },
+          seq: i
+        })
+      }))
+    })))
+
+    const toBob = yield collect(multiqueue.queue('bob').createReadStream())
+    yield multiqueue.queue('bob').dequeue({ key: toBob[0].key })
+
+    t.equal(yield multiqueue.queue('bob').tip(), postTip)
+    t.equal(yield multiqueue.queue('bob').checkpoint(), preTip + 1)
+
+    yield multiqueue.queue('bob').clear()
+    t.equal(yield multiqueue.queue('bob').tip(), preTip)
+    t.equal(yield multiqueue.queue('alice').tip(), postTip)
+  })))
+
+  t.end()
+}))
+
 test('live', function (t) {
   const db = memdb({ valueEncoding: 'json' })
   const multiqueue = createMultiqueue({ db })
@@ -384,4 +443,13 @@ test('batch enqueue', co(function* (t) {
 
 function values (arr) {
   return arr.map(obj => obj.value)
+}
+
+function genSequence (first, last) {
+  const arr = []
+  for (let i = first; i <= last; i++) {
+    arr.push(i)
+  }
+
+  return arr
 }
