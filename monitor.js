@@ -14,8 +14,8 @@ module.exports = function monitorMissing ({ multiqueue, debounce=1000, unref }) 
     const laneState = state[lane]
     laneState[seq] = HAVE
     if (lane in tips) {
-      for (let i = tips[lane]; i < tip; i++) {
-        delete laneState[lane]
+      for (let i = tips[lane]; i <= tip; i++) {
+        delete laneState[i]
       }
     }
 

@@ -2,6 +2,7 @@ require('any-promise/register/bluebird')
 
 const test = require('tape')
 const Promise = require('any-promise')
+const coeval = require('co')
 const co = require('co').wrap
 const promisify = require('pify')
 const collect = promisify(require('stream-collector'))
@@ -12,7 +13,43 @@ const { PassThrough } = require('readable-stream')
 const reorder = require('./sort-transform')
 const { createMultiqueue, processMultiqueue, monitorMissing } = require('./')
 
-test('basic', co(function* (t) {
+test('encoding', co(function* (t) {
+  const items = {
+    json: { a: 1 },
+    binary: new Buffer('{"a":1}'),
+    utf8: '{"a":1}'
+  }
+
+  for (let valueEncoding in items) {
+    let db = memdb({ valueEncoding })
+    let multiqueue = createMultiqueue({ db })
+    let value = items[valueEncoding]
+    yield multiqueue.enqueue({
+      lane: 'bob',
+      value
+    })
+
+    let queued = yield collect(multiqueue.queue('bob').createReadStream())
+    t.same(values(queued), [value])
+  }
+
+  const db = memdb({ valueEncoding: 'json' })
+  const multiqueue = createMultiqueue({ db })
+  try {
+    yield multiqueue.enqueue({
+      lane: 'bob',
+      value: 'hey'
+    })
+
+    t.fail('accepted invalid encoding')
+  } catch (err) {
+    t.ok(err)
+  }
+
+  t.end()
+}))
+
+test('queue basics - enqueue, queued, tip, dequeue', co(function* (t) {
   const db = memdb({ valueEncoding: 'json' })
   const multiqueue = createMultiqueue({ db })
   const objects = [
@@ -84,13 +121,12 @@ test('live', function (t) {
 })
 
 test('process', co(function* (t) {
-  t.plan(9)
-
+  const n = 5
+  const lanes = ['bob', 'carol', 'dave']
   const db = memdb({ valueEncoding: 'json' })
   const multiqueue = createMultiqueue({ db })
-  const lanes = ['bob', 'carol', 'dave']
 
-  for (let i = 0; i < 2; i++) {
+  for (let i = 0; i < n; i++) {
     lanes.forEach(lane => {
       multiqueue.enqueue({
         lane,
@@ -101,9 +137,22 @@ test('process', co(function* (t) {
 
   const concurrency = {}
   const running = {}
-  processMultiqueue({ multiqueue, worker }).start()
+  const processor = processMultiqueue({ multiqueue, worker })
+
+  let on
+  let workerIterations = lanes.length * n
+  let togglerInterval = setInterval(function toggleProcessing () {
+    on = !on
+    if (on) {
+      processor.start()
+    } else {
+      processor.pause()
+    }
+  }, 10)
 
   function worker ({ lane, value }) {
+    t.equal(on, true)
+
     running[lane] = true
     if (value.count === 1) {
       t.ok(lanes.every(lane => running[lane]), 'concurrency inter-lane')
@@ -117,8 +166,55 @@ test('process', co(function* (t) {
       setTimeout(function () {
         concurrency[lane]--
         resolve()
+        if (--workerIterations) return
+
+        clearInterval(togglerInterval)
+        t.end()
       }, 100)
     })
+  }
+}))
+
+test('processor.stop()', co(function* (t) {
+  const items = [0, 1, 2, 3, 4]
+  const db = memdb({ valueEncoding: 'json' })
+  const multiqueue = createMultiqueue({ db, autoincrement: false })
+  yield Promise.all(items.map(i => {
+    return multiqueue.enqueue({
+      lane: 'bob',
+      value: { i },
+      seq: i
+    })
+  }))
+
+  let processed = 0
+  const processor = processMultiqueue({ multiqueue, worker }).start()
+
+  function worker ({ lane, value }) {
+    t.equal(++processed, 1)
+    processor.stop()
+    setTimeout(t.end, 100)
+  }
+}))
+
+test('bad worker stops processing', co(function* (t) {
+  t.plan(1)
+
+  const items = [0]
+  const db = memdb({ valueEncoding: 'json' })
+  const multiqueue = createMultiqueue({ db })
+  ;[0, 1, 2].forEach(co(function* (i) {
+    yield multiqueue.enqueue({
+      lane: 'bob',
+      value: { i }
+    })
+  }))
+
+  const processor = processMultiqueue({ multiqueue, worker }).start()
+  processor.on('error', t.ok)
+
+  function worker ({ lane, value }) {
+    throw new Error('blah')
   }
 }))
 
@@ -141,7 +237,7 @@ test('order', function (t) {
 
 test('custom seq', co(function* (t) {
   const items = [5, 2, 4, 0, 3, 1]
-  t.plan(items.length + 1)
+  t.plan(items.length + 2)
 
   const db = memdb({ valueEncoding: 'json' })
   const multiqueue = createMultiqueue({ db, autoincrement: false })
@@ -161,8 +257,10 @@ test('custom seq', co(function* (t) {
     })
   }))
 
-  const tip = yield multiqueue.queue('bob').tip()
-  t.equal(tip, 5)
+  t.equal(yield multiqueue.queue('bob').tip(), 5)
+
+  const multiqueue2 = createMultiqueue({ db, autoincrement: false })
+  t.equal(yield multiqueue2.queue('bob').tip(), 5)
 
   processMultiqueue({ multiqueue, worker }).start()
 
@@ -172,12 +270,29 @@ test('custom seq', co(function* (t) {
   }
 }))
 
-test('monitor missing', function (t) {
+test('custom seq tip', co(function* (t) {
+  const items = [0, 1, 4]
+  const db = memdb({ valueEncoding: 'json' })
+  const multiqueue = createMultiqueue({ db, autoincrement: false })
+  yield Promise.all(items.map(i => {
+    return multiqueue.enqueue({
+      lane: 'bob',
+      value: { i },
+      seq: i
+    })
+  }))
+
+  const multiqueue2 = createMultiqueue({ db, autoincrement: false })
+  t.equal(yield multiqueue2.queue('bob').tip(), 1)
+  t.end()
+}))
+
+test('monitor missing', co(function* (t) {
   const db = memdb({ valueEncoding: 'json' })
   const multiqueue = createMultiqueue({ db, autoincrement: false })
   const monitor = monitorMissing({ multiqueue, debounce: 50, unref: false })
 
-  ;[5, 2].forEach(i => {
+  ;[5, 3].forEach(i => {
     multiqueue.enqueue({
       lane: 'bob',
       value: { i },
@@ -185,12 +300,26 @@ test('monitor missing', function (t) {
     })
   })
 
-  monitor.on('batch', function ({ lane, missing }) {
+  yield new Promise(resolve => monitor.once('batch', function ({ lane, missing }) {
     t.equal(lane, 'bob')
-    t.same(missing, [0, 1, 3, 4])
-    t.end()
+    t.same(missing, [0, 1, 2, 4])
+    resolve()
+  }))
+
+  ;[2, 0, 1].forEach(i => {
+    multiqueue.enqueue({
+      lane: 'bob',
+      value: { i },
+      seq: i
+    })
   })
-})
+
+  yield new Promise(resolve => monitor.once('batch', function ({ lane, missing }) {
+    t.equal(lane, 'bob')
+    t.same(missing, [4])
+    t.end()
+  }))
+}))
 
 test('batch enqueue', co(function* (t) {
   const n = 5

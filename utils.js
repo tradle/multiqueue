@@ -33,7 +33,7 @@ function validateEncoding ({ value, encoding }) {
     assert(Buffer.isBuffer(value), 'expected Buffer')
   } else if (encoding === 'json') {
     assert(value && typeof value === 'object', 'expected object')
-  } else if (encoding === 'string') {
+  } else if (encoding === 'utf8') {
     assert(typeof value === 'string', 'expected string')
   }
 }

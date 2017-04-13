@@ -20,12 +20,7 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
   ee.on('on', () => on = true)
   ee.on('off', () => on = false)
 
-  const gate = through.obj(function (data, enc, cb) {
-    if (on) return cb(null, data)
-
-    ee.once('on', () => cb(null, data))
-  })
-
+  const gate = createGate()
   const splitter = through.obj(function (data, enc, cb) {
     const { lane } = data
     if (!streams[lane]) {
@@ -48,6 +43,14 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
     gate,
     splitter
   )
+
+  function createGate () {
+    return through.obj(function (data, enc, cb) {
+      if (on) return cb(null, data)
+
+      ee.once('on', () => cb(null, data))
+    })
+  }
 
   function createSortingStream (lane) {
     const getCheckpoint = multiqueue.getLaneCheckpoint({ lane })
@@ -85,6 +88,8 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
     return through.obj({ highWaterMark: 0 }, co(function* (data, enc, cb) {
       const { key, value } = data
       try {
+        if (!on) yield new Promise(resolve => ee.once('on', resolve))
+
         const maybePromise = worker({ lane, value })
         if (isPromise(maybePromise)) yield maybePromise
 
@@ -109,6 +114,7 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
   }
 
   function stop () {
+    pause()
     work.end()
     return api
   }

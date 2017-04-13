@@ -8,7 +8,8 @@
   "license": "MIT",
   "scripts": {
     "lint": "eslint --quiet --ignore-path .gitignore .",
-    "test": "BLUEBIRD_DEBUG=1 node test"
+    "test": "BLUEBIRD_DEBUG=1 node test",
+    "coverage": "istanbul cover test.js"
   },
   "devDependencies": {
     "bluebird": "^3.5.0",

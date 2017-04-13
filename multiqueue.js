@@ -67,26 +67,6 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     return queues[identifier]
   }
 
-  function getInternalQueueAPI ({ db, lane }) {
-    const sub = subdown(db, lane, { valueEncoding, separator })
-    const opts = { db: sub, lane }
-    return {
-      get prefix () {
-        return sub.db.prefix
-      },
-      batchEnqueue: impl.batchEnqueuer(opts),
-      // enqueue: impl.enqueuer(opts),
-      checkpoint: () => getLaneCheckpoint({ lane }),
-      tip: () => impl.tip({ lane }),
-      // createReadStream: function (opts) {
-      //   return pump(
-      //     sub.createReadStream(opts),
-      //     keyParser(opts)
-      //   )
-      // }
-    }
-  }
-
   const getTip = co(function* ({ lane }) {
     let tip = tips[lane]
     if (typeof tip !== 'undefined') {
@@ -102,10 +82,11 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
   }
 
   function createQueue (lane) {
-    const internal = getInternalQueueAPI({ db, lane })
+    const sub = subdown(db, lane, { valueEncoding, separator })
+    const batchEnqueueInternal = impl.batchEnqueuer({ db: sub, lane })
     const promiseTip = getTip({ lane })
-    let tip
 
+    let tip
     const updateTip = co(function* ({ seq }) {
       if (typeof tip === 'undefined') tip = yield promiseTip
 
@@ -143,7 +124,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
         data.sort(sortAscendingBySeq)
       }
 
-      const seqs = yield internal.batchEnqueue({ data })
+      const seqs = yield batchEnqueueInternal({ data })
       let tip
       for (let seq of seqs) {
         tip = yield updateTip({ seq })
@@ -162,9 +143,6 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
       dequeue,
       batchEnqueue,
       createReadStream: createQueueStream.bind(null, lane),
-      get prefix () {
-        return getLanePrefix(lane)
-      },
       tip: () => getTip({ lane })
     }
 
