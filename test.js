@@ -12,6 +12,36 @@ const pump = require('pump')
 const { PassThrough } = require('readable-stream')
 const reorder = require('./sort-transform')
 const { createMultiqueue, processMultiqueue, monitorMissing } = require('./')
+const createGates = require('./gates')
+
+test('gates', co(function* (t) {
+  const gates = createGates()
+  t.notOk(gates.isOpen())
+
+  gates.open()
+  t.ok(gates.isOpen())
+
+  gates.close()
+  t.notOk(gates.isOpen())
+  t.notOk(gates.isOpen('a'))
+
+  process.nextTick(() => gates.open('a'))
+  yield gates.awaitOpen('a')
+  t.ok(gates.isOpen('a'))
+  t.notOk(gates.isOpen())
+
+  process.nextTick(() => gates.open())
+  yield gates.awaitOpen()
+  t.ok(gates.isOpen('a'))
+  t.ok(gates.isOpen())
+
+  process.nextTick(() => gates.close('a'))
+  yield gates.awaitClosed('a')
+  t.notOk(gates.isOpen('a'))
+  t.ok(gates.isOpen())
+
+  t.end()
+}))
 
 test('encoding', co(function* (t) {
   const items = {
@@ -138,20 +168,24 @@ test('process', co(function* (t) {
   const concurrency = {}
   const running = {}
   const processor = processMultiqueue({ multiqueue, worker })
+  processor.start()
 
-  let on
   let workerIterations = lanes.length * n
-  let togglerInterval = setInterval(function toggleProcessing () {
-    on = !on
-    if (on) {
-      processor.start()
+
+  const on = {}
+  lanes.forEach(lane => on[lane] = true)
+
+  const togglerIntervals = lanes.map(lane => setInterval(function toggleProcessing () {
+    on[lane] = !on[lane]
+    if (on[lane]) {
+      processor.start(lane)
     } else {
-      processor.pause()
+      processor.pause(lane)
     }
-  }, 10)
+  }, 10))
 
   function worker ({ lane, value }) {
-    t.equal(on, true)
+    t.equal(on[lane], true)
 
     running[lane] = true
     if (value.count === 1) {
@@ -168,7 +202,7 @@ test('process', co(function* (t) {
         resolve()
         if (--workerIterations) return
 
-        clearInterval(togglerInterval)
+        togglerIntervals.forEach(clearInterval)
         t.end()
       }, 100)
     })

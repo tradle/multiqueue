@@ -10,23 +10,20 @@ const extend = require('xtend/mutable')
 const reorder = require('./sort-transform')
 const { MAX_INT } = require('./utils')
 const AsyncEmitter = require('./async-emitter')
+const createGates = require('./gates')
 
 module.exports = function processMultiqueue ({ multiqueue, worker }) {
   const streams = {}
   const source = multiqueue.createReadStream({ live: true })
-
-  let on
-  const ee = new EventEmitter()
-  ee.on('on', () => on = true)
-  ee.on('off', () => on = false)
-
-  const gate = createGate()
+  const gates = createGates()
+  const mainGate = createGate()
   const splitter = through.obj(function (data, enc, cb) {
     const { lane } = data
     if (!streams[lane]) {
       streams[lane] = createSortingStream(lane)
       pump(
         streams[lane],
+        createGate(lane),
         createWorkerStream(lane),
         function (err) {
           if (err) api.emit('error', err)
@@ -40,15 +37,15 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
 
   const work = pump(
     source,
-    gate,
+    mainGate,
     splitter
   )
 
-  function createGate () {
+  function createGate (lane) {
     return through.obj(function (data, enc, cb) {
-      if (on) return cb(null, data)
+      if (gates.isOpen(lane)) return cb(null, data)
 
-      ee.once('on', () => cb(null, data))
+      gates.awaitOpen(lane).then(() => cb(null, data))
     })
   }
 
@@ -57,6 +54,11 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
 
     let checkpoint
     let sortStream
+
+    // TODO:
+    //
+    // make this and createWorkerStream more efficient
+    // currently it creates too many promises (at least one per item!)
     const ensureCheckpoint = through.obj({ highWaterMark: MAX_INT }, co(function* (data, enc, cb) {
       if (typeof checkpoint === 'undefined') {
         checkpoint = yield getCheckpoint
@@ -88,7 +90,9 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
     return through.obj({ highWaterMark: 0 }, co(function* (data, enc, cb) {
       const { key, value } = data
       try {
-        if (!on) yield new Promise(resolve => ee.once('on', resolve))
+        if (!gates.isOpen(lane)) {
+          yield gates.awaitOpen(lane)
+        }
 
         const maybePromise = worker({ lane, value })
         if (isPromise(maybePromise)) yield maybePromise
@@ -103,24 +107,30 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
     }))
   }
 
-  function start () {
-    ee.emit('on')
+  function start (lane) {
+    gates.open(lane)
     return api
   }
 
-  function pause () {
-    ee.emit('off')
+  function pause (lane) {
+    gates.close(lane)
     return api
   }
 
-  function stop () {
-    pause()
-    work.end()
+  function stop (lane) {
+    pause(lane)
+    if (!lane) work.end()
     return api
   }
 
   const api = new AsyncEmitter()
-  extend(api, { start, pause, stop })
+  extend(api, {
+    start,
+    resume: start,
+    pause,
+    stop
+  })
+
   return api
 }
 
