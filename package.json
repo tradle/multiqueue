@@ -1,7 +1,7 @@
 {
   "name": "@tradle/multiqueue",
   "version": "1.2.0",
-  "description": "persistent multiqueue, for running multiple queues in parallel",
+  "description": "persistent self-ordering multiqueue, for parallelism between queues, and serial..ism within them",
   "main": "index.js",
   "repository": "https://github.com/tradle/multiqueue",
   "author": "Mark Vayngrib <mark@tradle.io>",
@@ -26,13 +26,18 @@
     "duplexify": "^3.5.0",
     "lexicographic-integer": "^1.1.0",
     "merge2": "^1.0.3",
+    "object.omit": "^2.0.1",
     "pify": "^2.3.0",
+    "pump": "^1.0.2",
     "stream-collector": "^1.0.1",
-    "subleveldown": "^2.1.0"
+    "subleveldown": "^2.1.0",
+    "through2": "^2.0.3",
+    "xtend": "^4.0.1"
   },
   "keywords": [
     "queue",
     "multiqueue",
-    "persistent-queue"
+    "persistent-queue",
+    "self-ordering"
   ]
 }

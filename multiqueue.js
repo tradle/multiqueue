@@ -11,6 +11,7 @@ const through = require('through2')
 const extend = require('xtend/mutable')
 // const CombinedStream = require('combined-stream2')
 const merge = require('merge2')
+const omit = require('object.omit')
 const AsyncEmitter = require('./async-emitter')
 const implAutoincrement = require('./impl-autoincrement')
 const implCustomSeq = require('./impl-custom-seq')
@@ -20,11 +21,14 @@ const {
   createPassThrough,
   assert,
   validateEncoding,
-  firstInStream
+  firstInStream,
+  createKeyParserTransform
 } = require('./utils')
 
 const SEPARATOR = '!'
-const LANE_CHECKPOINT_PREFIX = '\x00'
+const MIN_CHAR = '\x00'
+const MAX_CHAR = '\xff'
+const QUEUE_CHECKPOINT_PREFIX = MIN_CHAR
 
 module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement=true }) {
   const { valueEncoding } = db.options
@@ -34,27 +38,26 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
   const ee = new AsyncEmitter()
   const tips = {}
   const have = {}
+  const keyParser = createKeyParserTransform(parseKey)
 
-  function markHave ({ lane, seq }) {
-    if (!have[lane]) have[lane] = {}
+  function markHave ({ queue, seq }) {
+    if (!have[queue]) have[queue] = {}
 
-    have[lane][seq] = true
+    have[queue][seq] = true
   }
 
-  function clearHave ({ lane, seq }) {
-    if (have[lane]) {
-      if (have[lane][seq]) {
-        delete have[lane][seq]
-        return true
-      }
+  function clearHave ({ queue, seq }) {
+    if (have[queue] && have[queue][seq]) {
+      delete have[queue][seq]
+      return true
     }
   }
 
-  function getQueueKeyRange ({ lane }) {
-    const prefix = getLanePrefix(lane)
+  function getQueueKeyRange ({ queue }) {
+    const prefix = getQueuePrefix(queue)
     return {
       gt: prefix,
-      lt: prefix + '\xff'
+      lt: prefix + MAX_CHAR
     }
   }
 
@@ -68,60 +71,56 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     return queues[identifier]
   }
 
-  const getTip = co(function* ({ lane }) {
-    let tip = tips[lane]
+  const getTip = co(function* ({ queue }) {
+    let tip = tips[queue]
     if (typeof tip !== 'undefined') {
       return tip
     }
 
-    tip = tips[lane] = yield impl.tip({ lane })
+    tip = tips[queue] = yield impl.tip({ queue })
     return tip
   })
 
-  function getKey ({ lane, seq }) {
-    return getLanePrefix(lane) + hexint(seq)
-  }
-
-  const clearQueue = co(function* ({ lane }) {
+  const clearQueue = co(function* ({ queue }) {
     yield Promise.all([
       yield collect(pump(
         db.createReadStream(extend({
           values: false
-        }, getQueueKeyRange({ lane }))),
+        }, getQueueKeyRange({ queue }))),
         through.obj(function (key, enc, cb) {
           db.del(key, cb)
         })
       )),
-      delAsync(LANE_CHECKPOINT_PREFIX + lane)
+      delAsync(QUEUE_CHECKPOINT_PREFIX + queue)
     ])
 
-    delete tips[lane]
+    delete tips[queue]
   })
 
-  function createQueue (lane) {
-    const sub = subdown(db, lane, { valueEncoding, separator })
-    const batchEnqueueInternal = impl.batchEnqueuer({ db: sub, lane })
-    const promiseTip = getTip({ lane })
+  function createQueue (queue) {
+    const sub = subdown(db, queue, { valueEncoding, separator })
+    const batchEnqueueInternal = impl.batchEnqueuer({ db: sub, queue })
+    const promiseTip = getTip({ queue })
 
     let tip
     const updateTip = co(function* ({ seq }) {
       if (typeof tip === 'undefined') tip = yield promiseTip
 
       let newTip = tip
-      if (tips[lane] + 1 === seq) {
-        clearHave({ lane, seq })
+      if (tips[queue] + 1 === seq) {
+        clearHave({ queue, seq })
         newTip = seq
       } else {
-        markHave({ lane, seq })
+        markHave({ queue, seq })
       }
 
-      while (clearHave({ lane, seq: newTip + 1 })) {
+      while (clearHave({ queue, seq: newTip + 1 })) {
         newTip++
       }
 
       if (newTip !== tip) {
-        tip = tips[lane] = newTip
-        ee.emitAsync('tip', { lane, tip })
+        tip = tips[queue] = newTip
+        ee.emitAsync('tip', { queue, tip })
       }
 
       return tip
@@ -150,82 +149,88 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
       return data.map((item, i) => {
         const { value } = item
         const seq = seqs[i]
-        const key = getKey({ lane, seq })
-        return { key, value, lane, tip, seq }
+        const key = getKey({ queue, seq })
+        return { key, value, queue, tip, seq }
       })
     })
 
-    const queue = queues[lane] = {
+    return {
       enqueue,
-      dequeue: () => dequeue({ lane }),
+      dequeue: () => dequeue({ queue }),
       batchEnqueue,
-      createReadStream: createQueueStream.bind(null, lane),
-      tip: () => getTip({ lane }),
-      clear: () => clearQueue({ lane }),
-      checkpoint: () => getLaneCheckpoint({ lane })
+      createReadStream: createQueueStream.bind(null, queue),
+      tip: () => getTip({ queue }),
+      clear: () => clearQueue({ queue }),
+      checkpoint: () => getQueueCheckpoint({ queue })
     }
-
-    return queues[lane]
   }
 
-  function createQueueStream (lane, opts) {
-    opts = extend(getQueueKeyRange({ lane }), opts)
+  function createQueueStream (queue, opts) {
+    opts = extend(getQueueKeyRange({ queue }), opts)
     return createReadStream(opts)
   }
 
-  function validateLaneName (lane) {
-    assert(typeof lane === 'string', 'expected string "lane"')
-    if (lane.indexOf(separator) !== -1) {
-      throw new Error('"lane" must not contain "separator"')
+  function validateQueueName (queue) {
+    assert(typeof queue === 'string', 'expected string "queue"')
+    if (queue.indexOf(separator) !== -1) {
+      throw new Error('"queue" must not contain "separator"')
     }
   }
 
-  const enqueue = co(function* ({ value, lane, seq }) {
-    validateLaneName(lane)
+  const enqueue = co(function* ({ value, queue, seq }) {
+    validateQueueName(queue)
     if (!autoincrement) {
       assert(typeof seq === 'number', 'expected "seq"')
     }
 
     validateEncoding({ value, encoding: valueEncoding })
-    const data = yield getQueue(lane).enqueue({ value, seq })
+    const data = yield getQueue(queue).enqueue({ value, seq })
     ee.emitAsync('enqueue', data)
   })
 
-  const batchEnqueue = co(function* ({ lane, data }) {
-    validateLaneName(lane)
+  const batchEnqueue = co(function* ({ queue, data }) {
+    validateQueueName(queue)
     if (!autoincrement) {
       assert(data.every(data => typeof data.seq === 'number'), 'expected every item to have a "seq"')
     }
 
     data.forEach(data => validateEncoding({ value: data.value, encoding: valueEncoding }))
-    const results = yield getQueue(lane).batchEnqueue({ lane, data })
+    const results = yield getQueue(queue).batchEnqueue({ queue, data })
     results.forEach(item => ee.emitAsync('enqueue', item))
   })
 
-  const dequeue = co(function* ({ lane }) {
-    assert(typeof lane === 'string', 'expected string "lane"')
-    const checkpoint = yield getLaneCheckpoint({ lane })
+  const dequeue = co(function* ({ queue }) {
+    assert(typeof queue === 'string', 'expected string "queue"')
+    const checkpoint = yield getQueueCheckpoint({ queue })
     const seq = typeof checkpoint === 'undefined' ? impl.firstSeq : checkpoint + 1
-    const key = getKey({ lane, seq })
+    const key = getKey({ queue, seq })
     const batch = [
       { type: 'del', key },
-      { type: 'put', key: LANE_CHECKPOINT_PREFIX + lane, value: seq }
+      { type: 'put', key: QUEUE_CHECKPOINT_PREFIX + queue, value: seq }
     ]
 
     yield batchAsync(batch)
-    ee.emitAsync('dequeue', { lane, seq })
+    ee.emitAsync('dequeue', { queue, seq })
   })
 
-  function getLaneCheckpoint ({ lane }) {
+  /**
+   * Get the seq of the last dequeued item
+   */
+  function getQueueCheckpoint ({ queue }) {
+    const prefix = QUEUE_CHECKPOINT_PREFIX + queue
     return firstInStream(db.createReadStream({
       limit: 1,
       keys: false,
-      start: LANE_CHECKPOINT_PREFIX + lane,
-      end: LANE_CHECKPOINT_PREFIX + lane + '\xff'
+      gte: prefix,
+      lt: prefix + MAX_CHAR
     }))
   }
 
   function createReadStream (opts={}) {
+    if (opts.queue) {
+      return createQueueStream(opts.queue, omit(opts, 'queue'))
+    }
+
     const old = db.createReadStream(extend({
       keys: true,
       values: true,
@@ -249,79 +254,73 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     return pump(merged, keyParser(opts))
   }
 
-  function keyParser (opts) {
-    return through.obj(function (data, enc, cb) {
-      if (opts.keys !== false) {
-        if (opts.values === false) {
-          return cb(null, parseKey(data))
-        }
-
-        extend(data, parseKey(data.key))
-      }
-
-      cb(null, data)
-    })
-  }
-
-  const getNextLane = co(function* (lane) {
+  /**
+   * Get the next queue after {queue}, lexicographically
+   */
+  const getNextQueue = co(function* (queue) {
     const opts = {
       values: false,
       limit: 1
     }
 
-    if (lane) {
-      opts.gt = getLanePrefix(lane) + '\xff'
+    if (queue) {
+      opts.gt = getQueuePrefix(queue) + MAX_CHAR
     }
 
     const results = yield collect(db.createReadStream(opts))
     if (results.length) {
-      return parseKey(results[0]).lane
+      return parseKey(results[0]).queue
     }
   })
 
-  const getLanes = co(function* () {
-    const lanes = []
-    let lane
+  /**
+   * horribly inefficient way of listing queues
+   * a better way would be to atomically update list of queues
+   * when a new one is created or completed
+   */
+  const getQueues = co(function* () {
+    const queues = []
+    let queue
     while (true) {
-      lane = yield getNextLane(lane)
-      if (!lane) break
+      queue = yield getNextQueue(queue)
+      if (!queue) break
 
-      lanes.push(lane)
+      queues.push(queue)
     }
 
-    return lanes
+    return queues
   })
 
-  function getLanePrefix (lane) {
+  function getKey ({ queue, seq }) {
+    // BAD as it assumes knowledge of changes-feed internals
+    return getQueuePrefix(queue) + hexint(seq)
+  }
+
+  function getQueuePrefix (queue) {
     // BAD as it assumes knowledge of subleveldown internals
     // the less efficient but better way would be to either export the prefixer function from subleveldown
-    // or use getQueue(lane).prefix instead
-    return separator + lane + separator
+    // or use getQueue(queue).prefix instead
+    return separator + queue + separator
   }
 
   function parseKey (key) {
-    // if (key.slice(0, separator.length) !== separator) {
-    //   return { seq: unhexint(key) }
-    // }
-
     const parts = key.split(separator)
     const seq = unhexint(parts.pop())
-    const lane = parts.pop()
-    return { lane, seq }
+    const queue = parts.pop()
+    return { queue, seq }
   }
 
   return extend(ee, {
     firstSeq: impl.firstSeq,
     autoincrement,
     queue: getQueue,
-    lane: getQueue,
     batchEnqueue,
     enqueue,
     dequeue,
     createReadStream,
-    getLanes,
-    getNextLane,
-    getLaneCheckpoint
+    queues: getQueues,
+    nextQueue: getNextQueue,
+    checkpoint: getQueueCheckpoint
   })
 }
 

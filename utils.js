@@ -4,6 +4,7 @@ const co = require('co').wrap
 const promisify = require('pify')
 const collect = promisify(require('stream-collector'))
 const through = require('through2')
+const extend = require('xtend/mutable')
 const MAX_INT = 2147483647
 
 const firstInStream = co(function* (stream) {
@@ -18,6 +19,7 @@ module.exports = {
   assert,
   validateEncoding,
   createPassThrough,
+  createKeyParserTransform,
   hexint,
   unhexint,
   firstInStream,
@@ -42,6 +44,22 @@ function createPassThrough () {
   return through.obj(function (data, enc, cb) {
     cb(null, data)
   })
+}
+
+function createKeyParserTransform (parseKey) {
+  return function (opts) {
+    return through.obj(function (data, enc, cb) {
+      if (opts.keys !== false) {
+        if (opts.values === false) {
+          return cb(null, parseKey(data))
+        }
+
+        extend(data, parseKey(data.key))
+      }
+
+      cb(null, data)
+    })
+  }
 }
 
 function hexint (n) {

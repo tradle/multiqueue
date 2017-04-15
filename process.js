@@ -18,20 +18,20 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
   const gates = createGates()
   const mainGate = createGate()
   const splitter = through.obj(function (data, enc, cb) {
-    const { lane } = data
-    if (!streams[lane]) {
-      streams[lane] = createSortingStream(lane)
+    const { queue } = data
+    if (!streams[queue]) {
+      streams[queue] = createSortingStream(queue)
       pump(
-        streams[lane],
-        createGate(lane),
-        createWorkerStream(lane),
+        streams[queue],
+        createGate(queue),
+        createWorkerStream(queue),
         function (err) {
           if (err) api.emit('error', err)
         }
       )
     }
 
-    streams[lane].write(data)
+    streams[queue].write(data)
     cb()
   })
 
@@ -41,16 +41,16 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
     splitter
   )
 
-  function createGate (lane) {
+  function createGate (queue) {
     return through.obj(function (data, enc, cb) {
-      if (gates.isOpen(lane)) return cb(null, data)
+      if (gates.isOpen(queue)) return cb(null, data)
 
-      gates.awaitOpen(lane).then(() => cb(null, data))
+      gates.awaitOpen(queue).then(() => cb(null, data))
     })
   }
 
-  function createSortingStream (lane) {
-    const getCheckpoint = multiqueue.queue(lane).checkpoint()
+  function createSortingStream (queue) {
+    const getCheckpoint = multiqueue.queue(queue).checkpoint()
 
     let checkpoint
     let sortStream
@@ -86,18 +86,18 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
     return duplex
   }
 
-  function createWorkerStream (lane) {
+  function createWorkerStream (queue) {
     return through.obj({ highWaterMark: 0 }, co(function* (data, enc, cb) {
       const { key, value } = data
       try {
-        if (!gates.isOpen(lane)) {
-          yield gates.awaitOpen(lane)
+        if (!gates.isOpen(queue)) {
+          yield gates.awaitOpen(queue)
         }
 
-        const maybePromise = worker({ lane, value })
+        const maybePromise = worker({ queue, value })
         if (isPromise(maybePromise)) yield maybePromise
 
-        yield multiqueue.queue(lane).dequeue()
+        yield multiqueue.queue(queue).dequeue()
       } catch (err) {
         return cb(err)
       }
@@ -107,19 +107,19 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
     }))
   }
 
-  function start (lane) {
-    gates.open(lane)
+  function start (queue) {
+    gates.open(queue)
     return api
   }
 
-  function pause (lane) {
-    gates.close(lane)
+  function pause (queue) {
+    gates.close(queue)
     return api
   }
 
-  function stop (lane) {
-    pause(lane)
-    if (!lane) work.end()
+  function stop (queue) {
+    pause(queue)
+    if (!queue) work.end()
     return api
   }
 

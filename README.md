@@ -5,8 +5,16 @@ Persistent multiqueue, for parallelism between queues, and serial..ism within th
 
 ## Usage 
 
-See [example](./example.js) for a lesson in nagging
+### Basic
+
+See [example](./example.js) for a basic lesson in nagging
+
+### Self-ordering
+
+The queues are self-ordering, provided you specify the position of each item.
+
+See [example-order](./example-order.js) for a basic lesson in unscrambling eggs
 
 ## Todo
 
-Improve accounting of lanes, maybe using level-updown to atomically save a lane name with the append to changes-feed
+Improve accounting of queues, maybe using level-updown to atomically save a queue name with the append to changes-feed

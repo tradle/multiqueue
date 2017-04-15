@@ -9,28 +9,6 @@ const {
 } = require('./utils')
 
 module.exports = function createAutoincrementBased ({ createQueueStream }) {
-  const dbToAppend = new Map()
-  return {
-    firstSeq: 1,
-    tip: co(function* ({ lane }) {
-      // autoincrement is always in order
-      const result = yield firstInStream(createQueueStream(lane, {
-        values: false,
-        reverse: true,
-        limit: 1
-      }))
-
-      return result ? result.seq : 0
-    }),
-    batchEnqueuer: function ({ db, lane }) {
-      const append = getAppend(db)
-      return co(function* ({ data }) {
-        const changes = yield Promise.all(data.map(item => append(item.value)))
-        return changes.map(item => item.change)
-      })
-    }
-  }
-
   function getAppend (db) {
     let cached = dbToAppend.get(db)
     if (cached) return cached
@@ -40,4 +18,29 @@ module.exports = function createAutoincrementBased ({ createQueueStream }) {
     dbToAppend.set(db, append)
     return append
   }
+
+  const dbToAppend = new Map()
+  const firstSeq = 1
+  const api = {
+    firstSeq,
+    tip: co(function* ({ queue }) {
+      // autoincrement is always in order
+      const result = yield firstInStream(createQueueStream(queue, {
+        values: false,
+        reverse: true,
+        limit: 1
+      }))
+
+      return result ? result.seq : firstSeq - 1
+    }),
+    batchEnqueuer: function batchEnqueuer ({ db, queue }) {
+      const append = getAppend(db)
+      return co(function* ({ data }) {
+        const changes = yield Promise.all(data.map(item => append(item.value)))
+        return changes.map(item => item.change)
+      })
+    }
+  }
+
+  return api
 }

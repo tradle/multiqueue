@@ -8,43 +8,43 @@ module.exports = function monitorMissing ({ multiqueue, debounce=1000, unref }) 
   const timeouts = {}
   const tips = {}
 
-  multiqueue.on('enqueue', function ({ lane, seq, tip }) {
-    if (!state[lane]) state[lane] = {}
+  multiqueue.on('enqueue', function ({ queue, seq, tip }) {
+    if (!state[queue]) state[queue] = {}
 
-    const laneState = state[lane]
-    laneState[seq] = HAVE
-    if (lane in tips) {
-      for (let i = tips[lane]; i <= tip; i++) {
-        delete laneState[i]
+    const queueState = state[queue]
+    queueState[seq] = HAVE
+    if (queue in tips) {
+      for (let i = tips[queue]; i <= tip; i++) {
+        delete queueState[i]
       }
     }
 
-    tips[lane] = tip
+    tips[queue] = tip
     for (let i = tip + 1; i < seq; i++) {
-      if (laneState[i] !== HAVE) {
-        laneState[i] = MISSING
+      if (queueState[i] !== HAVE) {
+        queueState[i] = MISSING
       }
     }
 
-    update(lane)
+    update(queue)
   })
 
   const ee = new EventEmitter()
-  ee.missing = function ({ lane }) {
-    const laneState = state[lane] || {}
+  ee.missing = function ({ queue }) {
+    const queueState = state[queue] || {}
     return Object
-      .keys(laneState)
-      .filter(seq => laneState[seq] === MISSING)
+      .keys(queueState)
+      .filter(seq => queueState[seq] === MISSING)
       .map(Number)
       .sort(sortAscending)
   }
 
-  function update (lane) {
-    clearTimeout(timeouts[lane])
-    const timeout = timeouts[lane] = setTimeout(() => {
-      const missing = ee.missing({ lane })
+  function update (queue) {
+    clearTimeout(timeouts[queue])
+    const timeout = timeouts[queue] = setTimeout(() => {
+      const missing = ee.missing({ queue })
       if (missing.length) {
-        ee.emit('batch', { lane, missing })
+        ee.emit('batch', { queue, missing })
       }
     }, debounce)
 

@@ -6,12 +6,13 @@ const {
 } = require('./utils')
 
 module.exports = function ({ createQueueStream }) {
+  const firstSeq = 0
   return {
-    firstSeq: 0,
-    tip: function ({ lane }) {
-      let prev = -1
+    firstSeq,
+    tip: function ({ queue }) {
+      let prev = firstSeq - 1
       return new Promise(resolve => {
-        const stream = createQueueStream(lane, { values: false })
+        const stream = createQueueStream(queue, { values: false })
           .on('data', function ({ seq }) {
             if (prev && seq > prev + 1) {
               // we hit a gap
@@ -24,7 +25,7 @@ module.exports = function ({ createQueueStream }) {
           .on('end', () => resolve(prev))
       })
     },
-    batchEnqueuer: function ({ db, lane }) {
+    batchEnqueuer: function ({ db, queue }) {
       const batchAsync = promisify(db.batch.bind(db))
       return co(function* ({ data }) {
         const batch = data.map(({ seq, value }) => {

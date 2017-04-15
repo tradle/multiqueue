@@ -55,7 +55,7 @@ test('encoding', co(function* (t) {
     let multiqueue = createMultiqueue({ db })
     let value = items[valueEncoding]
     yield multiqueue.enqueue({
-      lane: 'bob',
+      queue: 'bob',
       value
     })
 
@@ -67,7 +67,7 @@ test('encoding', co(function* (t) {
   const multiqueue = createMultiqueue({ db })
   try {
     yield multiqueue.enqueue({
-      lane: 'bob',
+      queue: 'bob',
       value: 'hey'
     })
 
@@ -84,15 +84,15 @@ test('queue basics - enqueue, queued, tip, dequeue', co(function* (t) {
   const multiqueue = createMultiqueue({ db })
   const objects = [
     {
-      lane: 'bob',
+      queue: 'bob',
       value: { a: 1 },
     },
     {
-      lane: 'bob',
+      queue: 'bob',
       value: { b: 1 },
     },
     {
-      lane: 'carol',
+      queue: 'carol',
       value: { c: 1 }
     }
   ]
@@ -107,25 +107,25 @@ test('queue basics - enqueue, queued, tip, dequeue', co(function* (t) {
   const tip = yield multiqueue.queue('bob').tip()
   t.equal(tip, 2)
 
-  const lanes = yield multiqueue.getLanes()
-  t.same(lanes, ['bob', 'carol'])
+  const queues = yield multiqueue.queues()
+  t.same(queues, ['bob', 'carol'])
 
-  let toBob = yield collect(multiqueue.queue('bob').createReadStream())
+  let toBob = yield collect(multiqueue.createReadStream({ queue: 'bob' }))
   t.same(values(toBob), bodies.slice(0, 2))
-  t.ok(toBob.every(obj => obj.lane === 'bob'))
+  t.ok(toBob.every(obj => obj.queue === 'bob'))
 
   let queued = yield collect(multiqueue.createReadStream())
   t.same(values(queued), bodies)
 
-  yield multiqueue.dequeue({ lane: 'bob' })
+  yield multiqueue.dequeue({ queue: 'bob' })
   queued = yield collect(multiqueue.createReadStream())
   t.same(values(queued), bodies.slice(1))
 
-  toBob = yield collect(multiqueue.queue('bob').createReadStream())
+  toBob = yield collect(multiqueue.createReadStream({ queue: 'bob' }))
   t.same(values(toBob), bodies.slice(1, 2))
 
-  yield multiqueue.queue('bob').dequeue({ lane: 'bob' })
-  toBob = yield collect(multiqueue.queue('bob').createReadStream())
+  yield multiqueue.dequeue({ queue: 'bob' })
+  toBob = yield collect(multiqueue.createReadStream({ queue: 'bob' }))
   t.same(values(toBob), [])
 
   t.end()
@@ -135,7 +135,7 @@ test('queue interface', co(function* (t) {
   const items = genSequence(0, 3)
   const db = memdb({ valueEncoding: 'json' })
   const multiqueue = createMultiqueue({ db })
-  const bob = multiqueue.queue('lane')
+  const bob = multiqueue.queue('queue')
   yield Promise.all(items.map(i => {
     return bob.enqueue({
       value: { i },
@@ -165,26 +165,28 @@ test('clear', co(function* (t) {
     const postTip = preTip + items.length
     // const bob = multiqueue.queue('bob')
     // const alice = multiqueue.queue('alice')
-    const lanes = ['alice', 'bob']
-    yield Promise.all(lanes.map(co(function* (lane) {
+    const queues = ['alice', 'bob']
+    yield Promise.all(queues.map(co(function* (queue) {
       yield Promise.all(items.map((n, i) => {
         return multiqueue.enqueue({
-          lane,
+          queue,
           value: { i },
           seq: i
         })
       }))
     })))
 
-    const toBob = yield collect(multiqueue.queue('bob').createReadStream())
-    yield multiqueue.queue('bob').dequeue({ lane: 'bob' })
+    const alice = multiqueue.queue('alice')
+    const bob = multiqueue.queue('bob')
+    const toBob = yield collect(bob.createReadStream())
+    yield bob.dequeue()
 
-    t.equal(yield multiqueue.queue('bob').tip(), postTip)
-    t.equal(yield multiqueue.queue('bob').checkpoint(), preTip + 1)
+    t.equal(yield bob.tip(), postTip)
+    t.equal(yield bob.checkpoint(), preTip + 1)
 
-    yield multiqueue.queue('bob').clear()
-    t.equal(yield multiqueue.queue('bob').tip(), preTip)
-    t.equal(yield multiqueue.queue('alice').tip(), postTip)
+    yield bob.clear()
+    t.equal(yield bob.tip(), preTip)
+    t.equal(yield alice.tip(), postTip)
   })))
 
   t.end()
@@ -196,7 +198,7 @@ test('live', function (t) {
   const live = multiqueue.createReadStream({ live: true })
   live.on('data', co(function* (data) {
     live.end()
-    t.equal(data.lane, 'bob')
+    t.equal(data.queue, 'bob')
     t.same(data.value, { a: 1 })
     yield multiqueue.dequeue(data)
     t.same(yield collect(multiqueue.createReadStream()), [])
@@ -204,21 +206,21 @@ test('live', function (t) {
   }))
 
   multiqueue.enqueue({
-    lane: 'bob',
+    queue: 'bob',
     value: { a: 1 }
   })
 })
 
 test('process', co(function* (t) {
   const n = 5
-  const lanes = ['bob', 'carol', 'dave']
+  const queues = ['bob', 'carol', 'dave']
   const db = memdb({ valueEncoding: 'json' })
   const multiqueue = createMultiqueue({ db })
 
   for (let i = 0; i < n; i++) {
-    lanes.forEach(lane => {
+    queues.forEach(queue => {
       multiqueue.enqueue({
-        lane,
+        queue,
         value: { count: i }
       })
     })
@@ -229,35 +231,35 @@ test('process', co(function* (t) {
   const processor = processMultiqueue({ multiqueue, worker })
   processor.start()
 
-  let workerIterations = lanes.length * n
+  let workerIterations = queues.length * n
 
   const on = {}
-  lanes.forEach(lane => on[lane] = true)
+  queues.forEach(queue => on[queue] = true)
 
-  const togglerIntervals = lanes.map(lane => setInterval(function toggleProcessing () {
-    on[lane] = !on[lane]
-    if (on[lane]) {
-      processor.start(lane)
+  const togglerIntervals = queues.map(queue => setInterval(function toggleProcessing () {
+    on[queue] = !on[queue]
+    if (on[queue]) {
+      processor.start(queue)
     } else {
-      processor.pause(lane)
+      processor.pause(queue)
     }
   }, 10))
 
-  function worker ({ lane, value }) {
-    t.equal(on[lane], true)
+  function worker ({ queue, value }) {
+    t.equal(on[queue], true)
 
-    running[lane] = true
+    running[queue] = true
     if (value.count === 1) {
-      t.ok(lanes.every(lane => running[lane]), 'concurrency inter-lane')
+      t.ok(queues.every(queue => running[queue]), 'concurrency inter-queue')
     }
 
-    if (!(lane in concurrency)) concurrency[lane] = 0
+    if (!(queue in concurrency)) concurrency[queue] = 0
 
-    t.equal(++concurrency[lane], 1, 'sequence intra-lane')
+    t.equal(++concurrency[queue], 1, 'sequence intra-queue')
 
     return new Promise(resolve => {
       setTimeout(function () {
-        concurrency[lane]--
+        concurrency[queue]--
         resolve()
         if (--workerIterations) return
 
@@ -274,7 +276,7 @@ test('processor.stop()', co(function* (t) {
   const multiqueue = createMultiqueue({ db, autoincrement: false })
   yield Promise.all(items.map(i => {
     return multiqueue.enqueue({
-      lane: 'bob',
+      queue: 'bob',
       value: { i },
       seq: i
     })
@@ -283,7 +285,7 @@ test('processor.stop()', co(function* (t) {
   let processed = 0
   const processor = processMultiqueue({ multiqueue, worker }).start()
 
-  function worker ({ lane, value }) {
+  function worker ({ queue, value }) {
     t.equal(++processed, 1)
     processor.stop()
     setTimeout(t.end, 100)
@@ -298,7 +300,7 @@ test('bad worker stops processing', co(function* (t) {
   const multiqueue = createMultiqueue({ db })
   ;[0, 1, 2].forEach(co(function* (i) {
     yield multiqueue.enqueue({
-      lane: 'bob',
+      queue: 'bob',
       value: { i }
     })
   }))
@@ -306,7 +308,7 @@ test('bad worker stops processing', co(function* (t) {
   const processor = processMultiqueue({ multiqueue, worker }).start()
   processor.on('error', t.ok)
 
-  function worker ({ lane, value }) {
+  function worker ({ queue, value }) {
     throw new Error('blah')
   }
 }))
@@ -334,17 +336,9 @@ test('custom seq', co(function* (t) {
 
   const db = memdb({ valueEncoding: 'json' })
   const multiqueue = createMultiqueue({ db, autoincrement: false })
-  // multiqueue.on('missing', e => console.log('missing', e))
-  // multiqueue.on('tip', tip => console.log('tip', tip))
-  // multiqueue.on('have', have => console.log('have', have))
-
-  // multiqueue.on('tip', function ({ lane, tip }) {
-  //   console.log('tip', tip)
-  // })
-
   yield Promise.all(items.map(i => {
     return multiqueue.enqueue({
-      lane: 'bob',
+      queue: 'bob',
       value: { i },
       seq: i
     })
@@ -358,7 +352,7 @@ test('custom seq', co(function* (t) {
   processMultiqueue({ multiqueue, worker }).start()
 
   let i = 0
-  function worker ({ lane, value }) {
+  function worker ({ queue, value }) {
     t.equal(value.i, i++)
   }
 }))
@@ -369,7 +363,7 @@ test('custom seq tip', co(function* (t) {
   const multiqueue = createMultiqueue({ db, autoincrement: false })
   yield Promise.all(items.map(i => {
     return multiqueue.enqueue({
-      lane: 'bob',
+      queue: 'bob',
       value: { i },
       seq: i
     })
@@ -387,28 +381,28 @@ test('monitor missing', co(function* (t) {
 
   ;[5, 3].forEach(i => {
     multiqueue.enqueue({
-      lane: 'bob',
+      queue: 'bob',
       value: { i },
       seq: i
     })
   })
 
-  yield new Promise(resolve => monitor.once('batch', function ({ lane, missing }) {
-    t.equal(lane, 'bob')
+  yield new Promise(resolve => monitor.once('batch', function ({ queue, missing }) {
+    t.equal(queue, 'bob')
     t.same(missing, [0, 1, 2, 4])
     resolve()
   }))
 
   ;[2, 0, 1].forEach(i => {
     multiqueue.enqueue({
-      lane: 'bob',
+      queue: 'bob',
       value: { i },
       seq: i
     })
   })
 
-  yield new Promise(resolve => monitor.once('batch', function ({ lane, missing }) {
-    t.equal(lane, 'bob')
+  yield new Promise(resolve => monitor.once('batch', function ({ queue, missing }) {
+    t.equal(queue, 'bob')
     t.same(missing, [4])
     t.end()
   }))
@@ -421,7 +415,7 @@ test('batch enqueue', co(function* (t) {
   const db = memdb({ valueEncoding: 'json' })
   const multiqueue = createMultiqueue({ db, autoincrement: false })
   yield multiqueue.batchEnqueue({
-    lane: 'bob',
+    queue: 'bob',
     data: new Array(n).fill(0).map((n, i) => {
       return {
         seq: i,
@@ -436,7 +430,7 @@ test('batch enqueue', co(function* (t) {
   processMultiqueue({ multiqueue, worker }).start()
 
   let i = 0
-  function worker ({ lane, value }) {
+  function worker ({ queue, value }) {
     t.equal(value.i, i++)
   }
 }))
