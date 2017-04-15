@@ -117,14 +117,14 @@ test('queue basics - enqueue, queued, tip, dequeue', co(function* (t) {
   let queued = yield collect(multiqueue.createReadStream())
   t.same(values(queued), bodies)
 
-  yield multiqueue.dequeue({ key: queued[0].key })
+  yield multiqueue.dequeue({ lane: 'bob' })
   queued = yield collect(multiqueue.createReadStream())
   t.same(values(queued), bodies.slice(1))
 
   toBob = yield collect(multiqueue.queue('bob').createReadStream())
   t.same(values(toBob), bodies.slice(1, 2))
 
-  yield multiqueue.queue('bob').dequeue({ key: toBob[0].key })
+  yield multiqueue.queue('bob').dequeue({ lane: 'bob' })
   toBob = yield collect(multiqueue.queue('bob').createReadStream())
   t.same(values(toBob), [])
 
@@ -148,7 +148,7 @@ test('queue interface', co(function* (t) {
   let toBob = yield collect(bob.createReadStream())
   t.same(values(toBob).map(val => val.i), items)
 
-  yield bob.dequeue({ key: toBob[0].key })
+  yield bob.dequeue()
 
   toBob = yield collect(bob.createReadStream())
   t.same(values(toBob).map(val => val.i), items.slice(1))
@@ -158,11 +158,11 @@ test('queue interface', co(function* (t) {
 
 test('clear', co(function* (t) {
   yield Promise.all([true, false].map(co(function* (autoincrement) {
-    const items = genSequence(0, 3)
-    const preTip = autoincrement ? 0 : -1
-    const postTip = autoincrement ? items.length : items.length - 1
     const db = memdb({ valueEncoding: 'json' })
     const multiqueue = createMultiqueue({ db, autoincrement })
+    const items = genSequence(0, 3)
+    const preTip = multiqueue.firstSeq - 1
+    const postTip = preTip + items.length
     // const bob = multiqueue.queue('bob')
     // const alice = multiqueue.queue('alice')
     const lanes = ['alice', 'bob']
@@ -177,7 +177,7 @@ test('clear', co(function* (t) {
     })))
 
     const toBob = yield collect(multiqueue.queue('bob').createReadStream())
-    yield multiqueue.queue('bob').dequeue({ key: toBob[0].key })
+    yield multiqueue.queue('bob').dequeue({ lane: 'bob' })
 
     t.equal(yield multiqueue.queue('bob').tip(), postTip)
     t.equal(yield multiqueue.queue('bob').checkpoint(), preTip + 1)

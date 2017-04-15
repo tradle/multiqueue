@@ -11,6 +11,7 @@ const {
 module.exports = function createAutoincrementBased ({ createQueueStream }) {
   const dbToAppend = new Map()
   return {
+    firstSeq: 1,
     tip: co(function* ({ lane }) {
       // autoincrement is always in order
       const result = yield firstInStream(createQueueStream(lane, {

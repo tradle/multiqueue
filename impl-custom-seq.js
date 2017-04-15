@@ -7,6 +7,7 @@ const {
 
 module.exports = function ({ createQueueStream }) {
   return {
+    firstSeq: 0,
     tip: function ({ lane }) {
       let prev = -1
       return new Promise(resolve => {

@@ -97,7 +97,7 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
         const maybePromise = worker({ lane, value })
         if (isPromise(maybePromise)) yield maybePromise
 
-        yield multiqueue.queue(lane).dequeue({ key })
+        yield multiqueue.queue(lane).dequeue()
       } catch (err) {
         return cb(err)
       }

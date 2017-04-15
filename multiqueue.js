@@ -157,7 +157,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
 
     const queue = queues[lane] = {
       enqueue,
-      dequeue,
+      dequeue: () => dequeue({ lane }),
       batchEnqueue,
       createReadStream: createQueueStream.bind(null, lane),
       tip: () => getTip({ lane }),
@@ -202,9 +202,11 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     results.forEach(item => ee.emitAsync('enqueue', item))
   })
 
-  const dequeue = co(function* ({ key }) {
-    assert(typeof key === 'string', 'expected string "key"')
-    const { lane, seq } = parseKey(key)
+  const dequeue = co(function* ({ lane }) {
+    assert(typeof lane === 'string', 'expected string "lane"')
+    const checkpoint = yield getLaneCheckpoint({ lane })
+    const seq = typeof checkpoint === 'undefined' ? impl.firstSeq : checkpoint + 1
+    const key = getKey({ lane, seq })
     const batch = [
       { type: 'del', key },
       { type: 'put', key: LANE_CHECKPOINT_PREFIX + lane, value: seq }
@@ -309,6 +311,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
   }
 
   return extend(ee, {
+    firstSeq: impl.firstSeq,
     autoincrement,
     queue: getQueue,
     lane: getQueue,
