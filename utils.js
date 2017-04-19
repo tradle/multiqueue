@@ -23,6 +23,7 @@ module.exports = {
   hexint,
   unhexint,
   firstInStream,
+  getSublevelPrefix,
   MAX_INT
 }
 
@@ -68,4 +69,11 @@ function hexint (n) {
 
 function unhexint (hex) {
   return lexint.unpack(Array.prototype.slice.call(new Buffer(hex, 'hex')))
+}
+
+function getSublevelPrefix ({ prefix, separator }) {
+  // BAD as it assumes knowledge of subleveldown internals
+  // the less efficient but better way would be to either export the prefixer function from subleveldown
+  // or use getQueue(queue).prefix instead
+  return separator + prefix + separator
 }

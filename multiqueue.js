@@ -22,18 +22,29 @@ const {
   assert,
   validateEncoding,
   firstInStream,
+  getSublevelPrefix,
   createKeyParserTransform
 } = require('./utils')
 
 const SEPARATOR = '!'
 const MIN_CHAR = '\x00'
 const MAX_CHAR = '\xff'
-const QUEUE_CHECKPOINT_PREFIX = MIN_CHAR
+const NAMESPACE = {
+  main: 'm',
+  checkpoint: 'c'
+}
 
 module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement=true }) {
   const { valueEncoding } = db.options
+  const mainDB = subdown(db, NAMESPACE.main, { valueEncoding, separator })
+  const checkpointsDB = subdown(db, NAMESPACE.checkpoint, { valueEncoding: 'json' })
+  const prefixes = {
+    checkpoint: getSublevelPrefix({ separator, prefix: NAMESPACE.checkpoint, }),
+    main: getSublevelPrefix({ separator, prefix: NAMESPACE.main })
+  }
+
   const batchAsync = promisify(db.batch.bind(db))
-  const delAsync = promisify(db.del.bind(db))
+  const delCheckpointAsync = promisify(checkpointsDB.del.bind(checkpointsDB))
   const queues = {}
   const ee = new AsyncEmitter()
   const tips = {}
@@ -84,21 +95,21 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
   const clearQueue = co(function* ({ queue }) {
     yield Promise.all([
       yield collect(pump(
-        db.createReadStream(extend({
+        mainDB.createReadStream(extend({
           values: false
         }, getQueueKeyRange({ queue }))),
         through.obj(function (key, enc, cb) {
-          db.del(key, cb)
+          mainDB.del(key, cb)
         })
       )),
-      delAsync(QUEUE_CHECKPOINT_PREFIX + queue)
+      delCheckpointAsync(checkpointsDB.prefix + queue)
     ])
 
     delete tips[queue]
   })
 
   function createQueue (queue) {
-    const sub = subdown(db, queue, { valueEncoding, separator })
+    const sub = subdown(mainDB, queue, { valueEncoding, separator })
     const batchEnqueueInternal = impl.batchEnqueuer({ db: sub, queue })
     const promiseTip = getTip({ queue })
 
@@ -203,10 +214,9 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     assert(typeof queue === 'string', 'expected string "queue"')
     const checkpoint = yield getQueueCheckpoint({ queue })
     const seq = typeof checkpoint === 'undefined' ? impl.firstSeq : checkpoint + 1
-    const key = getKey({ queue, seq })
     const batch = [
-      { type: 'del', key },
-      { type: 'put', key: QUEUE_CHECKPOINT_PREFIX + queue, value: seq }
+      { type: 'del', key: getKey({ queue, seq }) },
+      { type: 'put', key: getCheckpointKey(queue), value: seq }
     ]
 
     yield batchAsync(batch)
@@ -217,13 +227,11 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
    * Get the seq of the last dequeued item
    */
   function getQueueCheckpoint ({ queue }) {
-    const prefix = QUEUE_CHECKPOINT_PREFIX + queue
-    return firstInStream(db.createReadStream({
-      limit: 1,
-      keys: false,
-      gte: prefix,
-      lt: prefix + MAX_CHAR
-    }))
+    return new Promise(resolve => {
+      checkpointsDB.get(queue, function (err, result) {
+        resolve(err ? undefined : result)
+      })
+    })
   }
 
   function createReadStream (opts={}) {
@@ -231,7 +239,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
       return createQueueStream(opts.queue, omit(opts, 'queue'))
     }
 
-    const old = db.createReadStream(extend({
+    const old = mainDB.createReadStream(extend({
       keys: true,
       values: true,
       gt: separator
@@ -267,7 +275,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
       opts.gt = getQueuePrefix(queue) + MAX_CHAR
     }
 
-    const results = yield collect(db.createReadStream(opts))
+    const results = yield collect(mainDB.createReadStream(opts))
     if (results.length) {
       return parseKey(results[0]).queue
     }
@@ -291,16 +299,17 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     return queues
   })
 
+  function getCheckpointKey (queue) {
+    return prefixes.checkpoint + queue
+  }
+
   function getKey ({ queue, seq }) {
     // BAD as it assumes knowledge of changes-feed internals
-    return getQueuePrefix(queue) + hexint(seq)
+    return prefixes.main + getQueuePrefix(queue) + hexint(seq)
   }
 
   function getQueuePrefix (queue) {
-    // BAD as it assumes knowledge of subleveldown internals
-    // the less efficient but better way would be to either export the prefixer function from subleveldown
-    // or use getQueue(queue).prefix instead
-    return separator + queue + separator
+    return getSublevelPrefix({ separator, prefix: queue })
   }
 
   function parseKey (key) {
