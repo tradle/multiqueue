@@ -62,13 +62,6 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
     const ensureCheckpoint = through.obj({ highWaterMark: MAX_INT }, co(function* (data, enc, cb) {
       if (typeof checkpoint === 'undefined') {
         checkpoint = yield getCheckpoint
-        if (typeof checkpoint === 'undefined') {
-          // autoincrement: changes-feed starts at 1
-          // normally we start at 0
-          // checkpoint is seq of the last processed item
-          checkpoint = multiqueue.autoincrement ? 0 : -1
-        }
-
         sortStream = reorder({
           getPosition: data => data.seq,
           start: checkpoint + 1

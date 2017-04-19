@@ -45,6 +45,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
 
   const batchAsync = promisify(db.batch.bind(db))
   const delCheckpointAsync = promisify(checkpointsDB.del.bind(checkpointsDB))
+  const putCheckpointAsync = promisify(checkpointsDB.put.bind(checkpointsDB))
   const queues = {}
   const ee = new AsyncEmitter()
   const tips = {}
@@ -152,6 +153,10 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
       }
 
       const seqs = yield batchEnqueueInternal({ data })
+      if (seqs[0] === impl.firstSeq) {
+        yield putCheckpointAsync(queue, impl.firstSeq - 1)
+      }
+
       let tip
       for (let seq of seqs) {
         tip = yield updateTip({ seq })
@@ -262,42 +267,9 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     return pump(merged, keyParser(opts))
   }
 
-  /**
-   * Get the next queue after {queue}, lexicographically
-   */
-  const getNextQueue = co(function* (queue) {
-    const opts = {
-      values: false,
-      limit: 1
-    }
-
-    if (queue) {
-      opts.gt = getQueuePrefix(queue) + MAX_CHAR
-    }
-
-    const results = yield collect(mainDB.createReadStream(opts))
-    if (results.length) {
-      return parseKey(results[0]).queue
-    }
-  })
-
-  /**
-   * horribly inefficient way of listing queues
-   * a better way would be to atomically update list of queues
-   * when a new one is created or completed
-   */
-  const getQueues = co(function* () {
-    const queues = []
-    let queue
-    while (true) {
-      queue = yield getNextQueue(queue)
-      if (!queue) break
-
-      queues.push(queue)
-    }
-
-    return queues
-  })
+  function getQueues () {
+    return collect(checkpointsDB.createReadStream({ values: false }))
+  }
 
   function getCheckpointKey (queue) {
     return prefixes.checkpoint + queue
@@ -328,7 +300,6 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     dequeue,
     createReadStream,
     queues: getQueues,
-    nextQueue: getNextQueue,
     checkpoint: getQueueCheckpoint
   })
 }
