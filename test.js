@@ -117,15 +117,22 @@ test('queue basics - enqueue, queued, tip, dequeue', co(function* (t) {
   let queued = yield collect(multiqueue.createReadStream())
   t.same(values(queued), bodies)
 
-  yield multiqueue.dequeue({ queue: 'bob' })
-  queued = yield collect(multiqueue.createReadStream())
+  // open new multiqueue against same db
+  const multiqueue2 = createMultiqueue({ db })
+  t.equal(yield multiqueue2.queue('bob').tip(), 2)
+
+  queued = yield collect(multiqueue2.createReadStream())
+  t.same(values(queued), bodies)
+
+  yield multiqueue2.dequeue({ queue: 'bob' })
+  queued = yield collect(multiqueue2.createReadStream())
   t.same(values(queued), bodies.slice(1))
 
-  toBob = yield collect(multiqueue.createReadStream({ queue: 'bob' }))
+  toBob = yield collect(multiqueue2.createReadStream({ queue: 'bob' }))
   t.same(values(toBob), bodies.slice(1, 2))
 
-  yield multiqueue.dequeue({ queue: 'bob' })
-  toBob = yield collect(multiqueue.createReadStream({ queue: 'bob' }))
+  yield multiqueue2.dequeue({ queue: 'bob' })
+  toBob = yield collect(multiqueue2.createReadStream({ queue: 'bob' }))
   t.same(values(toBob), [])
 
   t.end()
