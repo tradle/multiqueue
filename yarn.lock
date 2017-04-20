@@ -1075,6 +1075,10 @@ strip-json-comments@~2.0.1:
   version "2.0.1"
   resolved "https://registry.yarnpkg.com/strip-json-comments/-/strip-json-comments-2.0.1.tgz#3c531942e908c2697c0ec344858c286c7ca0a60a"
 
+sublevel-prefixer@^1.0.0:
+  version "1.0.0"
+  resolved "https://registry.yarnpkg.com/sublevel-prefixer/-/sublevel-prefixer-1.0.0.tgz#4ee459ef663ac85bf28fc649d7b7965fda691073"
+
 subleveldown@^2.1.0:
   version "2.1.0"
   resolved "https://registry.yarnpkg.com/subleveldown/-/subleveldown-2.1.0.tgz#b23eca23c228772a67c6c4e449694304f0d706a1"

@@ -6,6 +6,7 @@ const collect = promisify(require('stream-collector'))
 const clone = require('xtend')
 const changesFeed = require('changes-feed')
 const subdown = require('subleveldown')
+const prefixer = require('sublevel-prefixer')
 const pump = require('pump')
 const through = require('through2')
 const extend = require('xtend/mutable')
@@ -36,13 +37,9 @@ const NAMESPACE = {
 
 module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement=true }) {
   const { valueEncoding } = db.options
+  const prefix = prefixer(separator)
   const mainDB = subdown(db, NAMESPACE.main, { valueEncoding, separator })
   const checkpointsDB = subdown(db, NAMESPACE.checkpoint, { valueEncoding: 'json' })
-  const prefixes = {
-    checkpoint: getSublevelPrefix({ separator, prefix: NAMESPACE.checkpoint, }),
-    main: getSublevelPrefix({ separator, prefix: NAMESPACE.main })
-  }
-
   const batchAsync = promisify(db.batch.bind(db))
   const delCheckpointAsync = promisify(checkpointsDB.del.bind(checkpointsDB))
   const putCheckpointAsync = promisify(checkpointsDB.put.bind(checkpointsDB))
@@ -66,11 +63,9 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
   }
 
   function getQueueKeyRange ({ queue }) {
-    const prefix = getQueuePrefix(queue)
-    return {
-      gt: prefix,
-      lt: prefix + MAX_CHAR
-    }
+    const gt = getQueuePrefix(queue)
+    const lt = gt + MAX_CHAR
+    return { gt, lt }
   }
 
   const impl = (autoincrement ? implAutoincrement : implCustomSeq)({ createQueueStream })
@@ -272,16 +267,16 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
   }
 
   function getCheckpointKey (queue) {
-    return prefixes.checkpoint + queue
+    return prefix(NAMESPACE.checkpoint, queue)
   }
 
   function getKey ({ queue, seq }) {
     // BAD as it assumes knowledge of changes-feed internals
-    return prefixes.main + getQueuePrefix(queue) + hexint(seq)
+    return prefix(NAMESPACE.main, prefix(queue, hexint(seq)))
   }
 
   function getQueuePrefix (queue) {
-    return getSublevelPrefix({ separator, prefix: queue })
+    return prefix(queue, '')
   }
 
   function parseKey (key) {
