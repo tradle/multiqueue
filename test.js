@@ -7,6 +7,8 @@ const co = require('co').wrap
 const promisify = require('pify')
 const collect = promisify(require('stream-collector'))
 const memdb = require('memdb')
+const memdown = require('memdown')
+const levelup = require('levelup')
 const through = require('through2')
 const pump = require('pump')
 const { PassThrough } = require('readable-stream')
@@ -339,10 +341,25 @@ test('order', function (t) {
 
 test('custom seq', co(function* (t) {
   const items = [5, 2, 4, 0, 3, 1]
-  t.plan(items.length + 2)
+  const postTip = items.length - 1
+  t.plan(items.length + 3)
 
-  const db = memdb({ valueEncoding: 'json' })
-  const multiqueue = createMultiqueue({ db, autoincrement: false })
+  let db
+  let multiqueue
+
+  const reinit = co(function* () {
+    if (db) {
+      yield new Promise(resolve => db.close(resolve))
+      reinitialized = true
+      t.equal(yield multiqueue.queue('bob').tip(), postTip)
+    }
+
+    db = openDB()
+    multiqueue = createMultiqueue({ db, autoincrement: false })
+    processMultiqueue({ multiqueue, worker }).start()
+  })
+
+  yield reinit()
   yield Promise.all(items.map(i => {
     return multiqueue.enqueue({
       queue: 'bob',
@@ -351,16 +368,21 @@ test('custom seq', co(function* (t) {
     })
   }))
 
-  t.equal(yield multiqueue.queue('bob').tip(), 5)
+  t.equal(yield multiqueue.queue('bob').tip(), postTip)
 
-  const multiqueue2 = createMultiqueue({ db, autoincrement: false })
-  t.equal(yield multiqueue2.queue('bob').tip(), 5)
+  let j = 0
+  let reinitialized
 
-  processMultiqueue({ multiqueue, worker }).start()
-
-  let i = 0
   function worker ({ queue, value }) {
-    t.equal(value.i, i++)
+    t.equal(value.i, j++)
+    if (!reinitialized && j === 2) {
+      j-- // this current task will need to reprocessed
+      reinit()
+    }
+  }
+
+  function openDB () {
+    return levelup('./customseq.db', { valueEncoding: 'json', db: memdown })
   }
 }))
 

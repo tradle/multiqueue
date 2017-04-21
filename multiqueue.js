@@ -229,7 +229,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
   function getQueueCheckpoint ({ queue }) {
     return new Promise(resolve => {
       checkpointsDB.get(queue, function (err, result) {
-        resolve(err ? undefined : result)
+        resolve(err ? impl.firstSeq - 1 : result)
       })
     })
   }
