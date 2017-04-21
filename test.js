@@ -178,8 +178,8 @@ test('queue interface', co(function* (t) {
   t.end()
 }))
 
-test('clear', co(function* (t) {
-  yield Promise.all([true, false].map(co(function* (autoincrement) {
+;[true, false].forEach(autoincrement => {
+  test(`clear (autoincrement=${autoincrement})`, co(function* (t) {
     const db = memdb({ valueEncoding: 'json' })
     const multiqueue = createMultiqueue({ db, autoincrement })
     const items = genSequence(0, 3)
@@ -187,19 +187,20 @@ test('clear', co(function* (t) {
     const postTip = preTip + items.length
     // const bob = multiqueue.queue('bob')
     // const alice = multiqueue.queue('alice')
-    const queues = ['alice', 'bob']
-    yield Promise.all(queues.map(co(function* (queue) {
+    const alice = multiqueue.queue('alice')
+    const bob = multiqueue.queue('bob')
+    t.equal(yield alice.tip(), preTip)
+    t.equal(yield bob.tip(), preTip)
+
+    yield Promise.all([alice, bob].map(co(function* (queue) {
       yield Promise.all(items.map((n, i) => {
-        return multiqueue.enqueue({
-          queue,
+        return queue.enqueue({
           value: { i },
           seq: i
         })
       }))
     })))
 
-    const alice = multiqueue.queue('alice')
-    const bob = multiqueue.queue('bob')
     const toBob = yield collect(bob.createReadStream())
     yield bob.dequeue()
 
@@ -209,10 +210,9 @@ test('clear', co(function* (t) {
     yield bob.clear()
     t.equal(yield bob.tip(), preTip)
     t.equal(yield alice.tip(), postTip)
-  })))
-
-  t.end()
-}))
+    t.end()
+  }))
+})
 
 test('live', function (t) {
   const db = memdb({ valueEncoding: 'json' })

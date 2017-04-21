@@ -108,7 +108,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
           mainDB.del(key, cb)
         })
       )),
-      delCheckpointAsync(checkpointsDB.prefix + queue)
+      delCheckpointAsync(queue)
     ])
 
     delete tips[queue]
