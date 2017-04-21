@@ -78,13 +78,23 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     return queues[identifier]
   }
 
-  const getTip = co(function* ({ queue }) {
+  /**
+   * the "tip" is the seq of the latest queued item excluding gaps
+   * e.g. if [0, 1, 2, 5, 6] are queued, the tip is 2
+   */
+  const getQueueTip = co(function* ({ queue }) {
     let tip = tips[queue]
     if (typeof tip !== 'undefined') {
       return tip
     }
 
-    tip = tips[queue] = yield impl.tip({ queue })
+    // the non-autoincrement implementation needs to know
+    // the seq of the last dequeued item
+    tip = tips[queue] = yield impl.tip({
+      queue,
+      getCheckpoint: () => getQueueCheckpoint({ queue })
+    })
+
     return tip
   })
 
@@ -107,7 +117,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
   function createQueue (queue) {
     const sub = subdown(mainDB, queue, { valueEncoding, separator })
     const batchEnqueueInternal = impl.batchEnqueuer({ db: sub, queue })
-    const promiseTip = getTip({ queue })
+    const promiseTip = getQueueTip({ queue })
 
     let tip
     const updateTip = co(function* ({ seq }) {
@@ -170,7 +180,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
       dequeue: () => dequeue({ queue }),
       batchEnqueue,
       createReadStream: createQueueStream.bind(null, queue),
-      tip: () => getTip({ queue }),
+      tip: () => getQueueTip({ queue }),
       clear: () => clearQueue({ queue }),
       checkpoint: () => getQueueCheckpoint({ queue })
     }

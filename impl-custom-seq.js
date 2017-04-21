@@ -9,8 +9,9 @@ module.exports = function ({ createQueueStream }) {
   const firstSeq = 0
   return {
     firstSeq,
-    tip: function ({ queue }) {
-      let prev = firstSeq - 1
+    tip: co(function* ({ queue, getCheckpoint }) {
+      // get the seq of last dequeued item
+      let prev = yield getCheckpoint()
       return new Promise(resolve => {
         const stream = createQueueStream(queue, { values: false })
           .on('data', function ({ seq }) {
@@ -24,7 +25,7 @@ module.exports = function ({ createQueueStream }) {
           })
           .on('end', () => resolve(prev))
       })
-    },
+    }),
     batchEnqueuer: function ({ db, queue }) {
       const batchAsync = promisify(db.batch.bind(db))
       return co(function* ({ data }) {

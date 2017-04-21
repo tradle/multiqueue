@@ -3,7 +3,20 @@ require('any-promise/register/bluebird')
 const test = require('tape')
 const Promise = require('any-promise')
 const coeval = require('co')
-const co = require('co').wrap
+const _co = require('co').wrap
+
+// log errors
+const co = function (gen) {
+  return _co(function* () {
+    try {
+      yield _co(gen)(...arguments)
+    } catch (err) {
+      console.error(err)
+      throw err
+    }
+  })
+}
+
 const promisify = require('pify')
 const collect = promisify(require('stream-collector'))
 const memdb = require('memdb')
@@ -341,21 +354,26 @@ test('order', function (t) {
 
 test('custom seq', co(function* (t) {
   const items = [5, 2, 4, 0, 3, 1]
-  const postTip = items.length - 1
-  t.plan(items.length + 3)
 
   let db
   let multiqueue
+  let reinitialized
+  let preTip = -1
+  let postTip = items.length - 1
+  let checkpoint = preTip
 
   const reinit = co(function* () {
     if (db) {
       yield new Promise(resolve => db.close(resolve))
       reinitialized = true
-      t.equal(yield multiqueue.queue('bob').tip(), postTip)
     }
 
     db = openDB()
     multiqueue = createMultiqueue({ db, autoincrement: false })
+    const bob = multiqueue.queue('bob')
+    t.equal(yield bob.tip(), reinitialized ? postTip : preTip)
+    t.equal(yield bob.checkpoint(), checkpoint)
+
     processMultiqueue({ multiqueue, worker }).start()
   })
 
@@ -370,14 +388,15 @@ test('custom seq', co(function* (t) {
 
   t.equal(yield multiqueue.queue('bob').tip(), postTip)
 
-  let j = 0
-  let reinitialized
-
   function worker ({ queue, value }) {
-    t.equal(value.i, j++)
-    if (!reinitialized && j === 2) {
-      j-- // this current task will need to reprocessed
+    t.equal(value.i, ++checkpoint)
+    if (!reinitialized && checkpoint === 2) {
+      checkpoint-- // this current task will need to reprocessed
       reinit()
+    }
+
+    if (checkpoint === postTip) {
+    t.end()
     }
   }
 
