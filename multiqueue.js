@@ -24,7 +24,8 @@ const {
   validateEncoding,
   firstInStream,
   getSublevelPrefix,
-  createKeyParserTransform
+  createKeyParserTransform,
+  pluckValuesTransform
 } = require('./utils')
 
 const SEPARATOR = '!'
@@ -178,6 +179,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     })
 
     return {
+      queued: () => getQueued(queue),
       enqueue,
       dequeue: () => dequeue({ queue }),
       batchEnqueue,
@@ -296,6 +298,16 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     return { queue, seq }
   }
 
+  function getQueued (queue, opts) {
+    if (typeof queue === 'object') {
+      opts = queue
+      queue = null
+    }
+
+    const source = queue ? createQueueStream(queue, opts) : createReadStream(opts)
+    return collect(source)
+  }
+
   return extend(ee, {
     firstSeq: impl.firstSeq,
     autoincrement,
@@ -305,7 +317,8 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     dequeue,
     createReadStream,
     queues: getQueues,
-    checkpoint: getQueueCheckpoint
+    checkpoint: getQueueCheckpoint,
+    queued: getQueued
   })
 }
 

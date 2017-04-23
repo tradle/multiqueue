@@ -74,7 +74,7 @@ test('encoding', co(function* (t) {
       value
     })
 
-    let queued = yield collect(multiqueue.queue('bob').createReadStream())
+    let queued = yield multiqueue.queue('bob').queued()
     t.same(values(queued), [value])
   }
 
@@ -125,11 +125,11 @@ test('queue basics - enqueue, queued, tip, dequeue', co(function* (t) {
   const queues = yield multiqueue.queues()
   t.same(queues, ['bob', 'carol'])
 
-  let toBob = yield collect(multiqueue.createReadStream({ queue: 'bob' }))
+  let toBob = yield multiqueue.queued('bob')
   t.same(values(toBob), bodies.slice(0, 2))
   t.ok(toBob.every(obj => obj.queue === 'bob'))
 
-  let queued = yield collect(multiqueue.createReadStream())
+  let queued = yield multiqueue.queued()
   t.same(values(queued), bodies)
 
   // open new multiqueue against same db
@@ -177,12 +177,12 @@ test('queue interface', co(function* (t) {
 
   t.equal(yield bob.tip(), items.length)
 
-  let toBob = yield collect(bob.createReadStream())
+  let toBob = yield bob.queued()
   t.same(values(toBob).map(val => val.i), items)
 
   yield bob.dequeue()
 
-  toBob = yield collect(bob.createReadStream())
+  toBob = yield bob.queued()
   t.same(values(toBob).map(val => val.i), items.slice(1))
 
   t.end()
@@ -233,7 +233,7 @@ test('live', function (t) {
     t.equal(data.queue, 'bob')
     t.same(data.value, { a: 1 })
     yield multiqueue.dequeue(data)
-    t.same(yield collect(multiqueue.createReadStream()), [])
+    t.same(yield multiqueue.queued(), [])
     t.end()
   }))
 
