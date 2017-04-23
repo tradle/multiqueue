@@ -158,12 +158,22 @@ test('queue interface', co(function* (t) {
   const db = memdb({ valueEncoding: 'json' })
   const multiqueue = createMultiqueue({ db })
   const bob = multiqueue.queue('queue')
+
+  let n = 0
+  const promiseEvents = new Promise(resolve => {
+    multiqueue.on('enqueue', function () {
+      if (++n === items.length) resolve()
+    })
+  })
+
   yield Promise.all(items.map(i => {
     return bob.enqueue({
       value: { i },
       seq: i
     })
   }))
+
+  yield promiseEvents
 
   t.equal(yield bob.tip(), items.length)
 

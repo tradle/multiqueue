@@ -171,7 +171,9 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
         const { value } = item
         const seq = seqs[i]
         const key = getKey({ queue, seq })
-        return { key, value, queue, tip, seq }
+        const ret = { key, value, queue, tip, seq }
+        ee.emitAsync('enqueue', ret)
+        return ret
       })
     })
 
@@ -205,8 +207,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     }
 
     validateEncoding({ value, encoding: valueEncoding })
-    const data = yield getQueue(queue).enqueue({ value, seq })
-    ee.emitAsync('enqueue', data)
+    yield getQueue(queue).enqueue({ value, seq })
   })
 
   const batchEnqueue = co(function* ({ queue, data }) {
@@ -216,8 +217,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     }
 
     data.forEach(data => validateEncoding({ value: data.value, encoding: valueEncoding }))
-    const results = yield getQueue(queue).batchEnqueue({ queue, data })
-    results.forEach(item => ee.emitAsync('enqueue', item))
+    yield getQueue(queue).batchEnqueue({ queue, data })
   })
 
   const dequeue = co(function* ({ queue }) {
