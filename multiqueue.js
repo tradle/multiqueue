@@ -42,6 +42,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
   const prefix = prefixer(separator)
   const mainDB = subdown(db, NAMESPACE.main, { valueEncoding, separator })
   const checkpointsDB = subdown(db, NAMESPACE.checkpoint, { valueEncoding: 'json' })
+  const getAsync = promisify(db.get.bind(db))
   const batchAsync = promisify(db.batch.bind(db))
   const delCheckpointAsync = promisify(checkpointsDB.del.bind(checkpointsDB))
   const putCheckpointAsync = promisify(checkpointsDB.put.bind(checkpointsDB))
@@ -181,6 +182,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     })
 
     return {
+      getItemAtSeq: seq => getItemAtIndex({ queue, seq }),
       queued: () => getQueued(queue),
       enqueue,
       dequeue: () => dequeue({ queue }),
@@ -190,6 +192,10 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
       clear: () => clearQueue({ queue }),
       checkpoint: () => getQueueCheckpoint({ queue })
     }
+  }
+
+  function getItemAtIndex ({ queue, seq }) {
+    return getAsync(getKey({ queue, seq }))
   }
 
   function createQueueStream (queue, opts) {

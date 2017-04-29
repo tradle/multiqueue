@@ -121,6 +121,7 @@ test('queue basics - enqueue, queued, tip, dequeue', co(function* (t) {
 
   const tip = yield multiqueue.queue('bob').tip()
   t.equal(tip, multiqueue.firstSeq + 1)
+  t.same(yield multiqueue.queue('bob').getItemAtSeq(0), objects[0].value)
 
   const queues = yield multiqueue.queues()
   t.same(queues, ['bob', 'carol'])
