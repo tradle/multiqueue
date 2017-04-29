@@ -6,9 +6,7 @@ const {
 } = require('./utils')
 
 module.exports = function ({ createQueueStream }) {
-  const firstSeq = 0
   return {
-    firstSeq,
     tip: co(function* ({ queue, getCheckpoint }) {
       // get the seq of last dequeued item
       let prev = yield getCheckpoint()

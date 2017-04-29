@@ -13,16 +13,14 @@ module.exports = function createAutoincrementBased ({ createQueueStream }) {
     let cached = dbToAppend.get(db)
     if (cached) return cached
 
-    const feed = changesFeed(db)
+    const feed = changesFeed(db, { start: 0 })
     const append = promisify(feed.append.bind(feed))
     dbToAppend.set(db, append)
     return append
   }
 
   const dbToAppend = new Map()
-  const firstSeq = 1
   const api = {
-    firstSeq,
     tip: co(function* ({ queue }) {
       // autoincrement is always in order
       const result = yield firstInStream(createQueueStream(queue, {
@@ -31,7 +29,7 @@ module.exports = function createAutoincrementBased ({ createQueueStream }) {
         limit: 1
       }))
 
-      return result ? result.seq : firstSeq - 1
+      return result && result.seq
     }),
     batchEnqueuer: function batchEnqueuer ({ db, queue }) {
       const append = getAppend(db)

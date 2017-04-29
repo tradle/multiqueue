@@ -101,6 +101,10 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
   }
 
   function start (queue) {
+    if (stopped) {
+      throw new Error('am stopped. You might want to use pause/resume instead of start/stop')
+    }
+
     gates.open(queue)
     return api
   }
@@ -112,10 +116,15 @@ module.exports = function processMultiqueue ({ multiqueue, worker }) {
 
   function stop (queue) {
     pause(queue)
-    if (!queue) work.end()
+    if (!queue) {
+      work.end()
+      stopped = true
+    }
+
     return api
   }
 
+  let stopped
   const api = new AsyncEmitter()
   extend(api, {
     start,

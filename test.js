@@ -120,7 +120,7 @@ test('queue basics - enqueue, queued, tip, dequeue', co(function* (t) {
   ])
 
   const tip = yield multiqueue.queue('bob').tip()
-  t.equal(tip, 2)
+  t.equal(tip, multiqueue.firstSeq + 1)
 
   const queues = yield multiqueue.queues()
   t.same(queues, ['bob', 'carol'])
@@ -134,7 +134,7 @@ test('queue basics - enqueue, queued, tip, dequeue', co(function* (t) {
 
   // open new multiqueue against same db
   const multiqueue2 = createMultiqueue({ db })
-  t.equal(yield multiqueue2.queue('bob').tip(), 2)
+  t.equal(yield multiqueue2.queue('bob').tip(), multiqueue.firstSeq + 1)
 
   queued = yield collect(multiqueue2.createReadStream())
   t.same(values(queued), bodies)
@@ -175,7 +175,7 @@ test('queue interface', co(function* (t) {
 
   yield promiseEvents
 
-  t.equal(yield bob.tip(), items.length)
+  t.equal(yield bob.tip(), multiqueue.firstSeq + items.length - 1)
 
   let toBob = yield bob.queued()
   t.same(values(toBob).map(val => val.i), items)

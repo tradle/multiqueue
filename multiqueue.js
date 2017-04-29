@@ -4,7 +4,6 @@ const co = require('co').wrap
 const promisify = require('pify')
 const collect = promisify(require('stream-collector'))
 const clone = require('xtend')
-const changesFeed = require('changes-feed')
 const subdown = require('subleveldown')
 const prefixer = require('sublevel-prefixer')
 const pump = require('pump')
@@ -35,6 +34,8 @@ const NAMESPACE = {
   main: 'm',
   checkpoint: 'c'
 }
+
+const FIRST_SEQ = 0
 
 module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement=true }) {
   const { valueEncoding } = db.options
@@ -91,12 +92,13 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
 
     // the non-autoincrement implementation needs to know
     // the seq of the last dequeued item
-    tip = tips[queue] = yield impl.tip({
+    tip = yield impl.tip({
       queue,
       getCheckpoint: () => getQueueCheckpoint({ queue })
     })
 
-    return tip
+    tip = typeof tip === 'undefined' ? FIRST_SEQ - 1 : tip
+    return tips[queue] = tip
   })
 
   const clearQueue = co(function* ({ queue }) {
@@ -159,8 +161,8 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
       }
 
       const seqs = yield batchEnqueueInternal({ data })
-      if (seqs[0] === impl.firstSeq) {
-        yield putCheckpointAsync(queue, impl.firstSeq - 1)
+      if (seqs[0] === FIRST_SEQ) {
+        yield putCheckpointAsync(queue, FIRST_SEQ - 1)
       }
 
       let tip
@@ -225,7 +227,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
   const dequeue = co(function* ({ queue }) {
     assert(typeof queue === 'string', 'expected string "queue"')
     const checkpoint = yield getQueueCheckpoint({ queue })
-    const seq = typeof checkpoint === 'undefined' ? impl.firstSeq : checkpoint + 1
+    const seq = typeof checkpoint === 'undefined' ? FIRST_SEQ : checkpoint + 1
     const batch = [
       { type: 'del', key: getKey({ queue, seq }) },
       { type: 'put', key: getCheckpointKey(queue), value: seq }
@@ -241,7 +243,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
   function getQueueCheckpoint ({ queue }) {
     return new Promise(resolve => {
       checkpointsDB.get(queue, function (err, result) {
-        resolve(err ? impl.firstSeq - 1 : result)
+        resolve(err ? FIRST_SEQ - 1 : result)
       })
     })
   }
@@ -309,7 +311,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
   }
 
   return extend(ee, {
-    firstSeq: impl.firstSeq,
+    firstSeq: FIRST_SEQ,
     autoincrement,
     queue: getQueue,
     batchEnqueue,
