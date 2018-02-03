@@ -215,7 +215,7 @@ module.exports = function createQueues ({ db, separator=SEPARATOR, autoincrement
     }
 
     validateEncoding({ value, encoding: valueEncoding })
-    yield getQueue(queue).enqueue({ value, seq })
+    return yield getQueue(queue).enqueue({ value, seq })
   })
 
   const batchEnqueue = co(function* ({ queue, data }) {
