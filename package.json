@@ -1,6 +1,6 @@
 {
   "name": "@tradle/multiqueue",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "description": "persistent self-ordering multiqueue, for parallelism between queues, and serial..ism within them",
   "main": "index.js",
   "repository": "https://github.com/tradle/multiqueue",
