@@ -22,7 +22,7 @@ module.exports = function enforceOrder ({ start=0, getPosition }) {
         last = seq
         this.push(item)
       }
-    } else {
+    } else if (seq > expected) {
       debug(`delaying item: ${seq}, expected: ${expected}`)
       buffer.set(seq, data)
     }
